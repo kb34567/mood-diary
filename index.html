@@ -1551,13 +1551,36 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     return entry.moments.filter(function(m){ return !exportHidden[m.moodKey]; });
   }
 
+  var moodIconCache = {};
+  function resolveMoodIconForExport(mood){
+    if(!mood.image) return Promise.resolve(null);
+    if(Object.prototype.hasOwnProperty.call(moodIconCache, mood.key)) return Promise.resolve(moodIconCache[mood.key]);
+    if(mood.image.indexOf(".svg") !== -1 && mood.image.indexOf("data:") !== 0){
+      return fetch(mood.image).then(function(r){ return r.text(); }).then(function(svgText){
+        var markup = svgText.replace("<svg ", '<svg width="100%" height="100%" ');
+        moodIconCache[mood.key] = {type:"svg", markup: markup};
+        return moodIconCache[mood.key];
+      }).catch(function(){ moodIconCache[mood.key] = null; return null; });
+    }
+    moodIconCache[mood.key] = {type:"img", src: mood.image};
+    return Promise.resolve(moodIconCache[mood.key]);
+  }
+
+  function moodIconHtmlForExport(mood, sizePt){
+    var icon = moodIconCache[mood.key];
+    if(!icon) return "";
+    var boxOpen = '<span style="display:inline-flex;width:'+sizePt+'pt;height:'+sizePt+'pt;flex:none;">';
+    if(icon.type === "svg") return boxOpen + icon.markup + '</span>';
+    return boxOpen + '<img src="'+icon.src+'" style="width:100%;height:100%;object-fit:contain;">' + '</span>';
+  }
+
   function buildExportPageEl(stage, dateKey, entry, moments){
     var d = new Date(dateKey + "T00:00:00");
     var momentsHtml = moments.length ? moments.map(function(m){
       var mood = getMood(m.moodKey);
       return '<div style="margin-bottom:12pt;">' +
         '<div style="display:flex;align-items:center;gap:6pt;margin-bottom:4pt;">' +
-          (mood.image ? '<img src="'+mood.image+'" style="width:15pt;height:15pt;object-fit:contain;">' : '') +
+          moodIconHtmlForExport(mood, 15) +
           '<span style="font-size:10pt;font-weight:600;color:'+mood.color+';">'+escapeHtml(mood.label)+'</span>' +
         '</div>' +
         '<div style="font-size:10.5pt;line-height:1.75;white-space:pre-wrap;color:#2B2A28;">'+escapeHtml(m.text)+'</div>' +
@@ -1603,6 +1626,16 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     }
 
     btn.disabled = true;
+    statusEl.textContent = "準備圖示中⋯⋯";
+    var usedMoodKeys = {};
+    pages.forEach(function(p){ p.moments.forEach(function(m){ usedMoodKeys[m.moodKey] = true; }); });
+    var iconPromises = Object.keys(usedMoodKeys).map(function(k){ return resolveMoodIconForExport(getMood(k)); });
+
+    Promise.all(iconPromises).then(function(){
+      startPdfRender();
+    });
+
+    function startPdfRender(){
     var jsPDF = window.jspdf.jsPDF;
     var doc = new jsPDF({unit:"mm", format:"a5", orientation:"portrait"});
     var stage = document.createElement("div");
@@ -1636,6 +1669,7 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
       });
     }
     nextPage();
+    }
   }
   document.getElementById("exportPdfBtn").addEventListener("click", generateDiaryPdf);
 
