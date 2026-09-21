@@ -1731,15 +1731,13 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     if(photos && photos.length){
       // Boxes are portrait (taller than wide) since most photos people take on a phone are vertical;
       // sizing depends on the count so a lone photo isn't stretched into a short wide strip.
-      // Uses a background-image instead of <img object-fit> because html2canvas doesn't reliably
-      // honor object-fit -- with an <img> it just stretches to the box, warping any photo whose
-      // aspect ratio doesn't already match.
-      var photoBox = function(w, h){ return function(p){
-        return '<div style="width:'+w+'mm;height:'+h+'mm;border-radius:4pt;flex:none;background-image:url('+p+');background-size:cover;background-position:center;"></div>';
-      }; };
+      // These render as empty slots -- reserving the right space so the text layout above is
+      // correct -- and the actual photos get embedded straight into the PDF afterward at their
+      // original quality (see nextPage()), instead of being rasterized into the page canvas and
+      // JPEG-recompressed a second time, which is what was making them look soft/blurry.
       var dims = photos.length === 1 ? [66,88] : photos.length === 2 ? [52,69] : [36,48];
       photosHtml = '<div style="display:flex;justify-content:center;gap:6mm;margin-top:auto;padding-top:12pt;flex:none;">' +
-        photos.map(photoBox(dims[0], dims[1])).join("") +
+        photos.map(function(p, i){ return '<div class="export-photo-slot" data-photo-idx="'+i+'" style="width:'+dims[0]+'mm;height:'+dims[1]+'mm;flex:none;"></div>'; }).join("") +
       '</div>';
     }
 
@@ -1856,11 +1854,27 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
         return;
       }
       statusEl.textContent = "匯出中⋯⋯("+(idx+1)+"/"+pages.length+")";
-      var node = buildExportPageEl(stage, pages[idx]);
-      html2canvas(node, {scale:2, useCORS:true, backgroundColor:"#FBF9F4"}).then(function(canvas){
+      var descriptor = pages[idx];
+      var node = buildExportPageEl(stage, descriptor);
+      // Lossless PNG for the text/header layer (no photos in it, so it stays small); each photo
+      // gets added separately below at full original quality.
+      html2canvas(node, {scale:2.5, useCORS:true, backgroundColor:"#FBF9F4"}).then(function(canvas){
         if(idx > 0) doc.addPage("a5", "portrait");
-        var imgData = canvas.toDataURL("image/jpeg", 0.85);
-        doc.addImage(imgData, "JPEG", 0, 0, 148, 210);
+        doc.addImage(canvas.toDataURL("image/png"), "PNG", 0, 0, 148, 210);
+        var pageRect = node.getBoundingClientRect();
+        var mmPerPx = 148 / pageRect.width;
+        node.querySelectorAll(".export-photo-slot").forEach(function(slot){
+          var pi = parseInt(slot.getAttribute("data-photo-idx"), 10);
+          var src = descriptor.photos[pi];
+          if(!src) return;
+          var r = slot.getBoundingClientRect();
+          var x = (r.left - pageRect.left) * mmPerPx;
+          var y = (r.top - pageRect.top) * mmPerPx;
+          var w = r.width * mmPerPx;
+          var h = r.height * mmPerPx;
+          try{ doc.addImage(src, "JPEG", x, y, w, h); }
+          catch(e){ console.warn("photo embed failed", e); }
+        });
         idx++;
         nextPage();
       }).catch(function(e){
