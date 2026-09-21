@@ -16,6 +16,8 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
 :root{
   --bg:#E4E1D6;
@@ -87,7 +89,8 @@ textarea#momentText::placeholder{color:var(--text-dim);}
 .field-group{margin-bottom:12px;}
 .field-title{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text-dim);margin:0 0 8px;}
 .field-toggle-row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;}
-.field-toggle-chip{padding:6px 12px;border-radius:100px;border:1px solid var(--border);background:var(--surface);font-family:inherit;font-size:12.5px;color:var(--text);cursor:pointer;}
+.field-toggle-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:100px;border:1px solid var(--border);background:var(--surface);font-family:inherit;font-size:12.5px;color:var(--text);cursor:pointer;}
+.field-toggle-chip.with-icon{padding-left:6px;}
 .field-toggle-chip[aria-pressed="true"]{background:var(--accent);color:#fff;border-color:var(--accent);}
 .field-toggle-chip:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
 .field-input-row{display:flex;gap:6px;}
@@ -386,12 +389,21 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
           <div class="section-head"><h2 class="section-title">☁️ 雲端同步</h2></div>
           <div id="syncStatusWrap"></div>
         </div>
-        <div class="section" style="border-bottom:none;">
+        <div class="section">
           <div class="section-head"><h2 class="section-title">表情倉庫</h2><span class="section-hint">新增 · 編輯心情</span></div>
           <div class="choice-row" id="moodFilterRow"></div>
           <div class="mood-grid" id="moodGrid"></div>
           <div id="moodEditorWrap"></div>
           <input type="file" id="moodImageInput" accept="image/*" hidden>
+        </div>
+        <div class="section" style="border-bottom:none;">
+          <div class="section-head"><h2 class="section-title">📖 匯出成書</h2><span class="section-hint">PDF · A5</span></div>
+          <p class="mood-image-hint" style="margin-bottom:12px;">把日記匯出成一本 PDF 小冊子,一天一頁,含照片。可以選擇隱藏哪些心情的內容,不會出現在匯出檔案裡。</p>
+          <div class="choice-row" id="exportQuickRow"></div>
+          <p class="picker-label">要隱藏的心情</p>
+          <div id="exportMoodChecks" style="margin-bottom:12px;"></div>
+          <button type="button" class="editor-save-btn" id="exportPdfBtn">匯出 PDF</button>
+          <p class="editor-msg" id="exportStatus" style="margin-top:8px;"></p>
         </div>
       </section>
     </div>
@@ -774,6 +786,7 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
   var settingsFilter = "all";
   var editingMoodKey = null;
   var moodEditorDraft = null;
+  var exportHidden = {};
 
   /* ---------- DOM refs ---------- */
   var composerSectionEl = document.getElementById("composerSection");
@@ -1487,6 +1500,145 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     });
   }
 
+  /* ---------- export to PDF (A5 book) ---------- */
+  function renderExportSection(){
+    var quickRow = document.getElementById("exportQuickRow");
+    if(!quickRow) return;
+    quickRow.innerHTML = "";
+    var hideNegBtn = document.createElement("button");
+    hideNegBtn.type = "button"; hideNegBtn.className = "choice-chip";
+    hideNegBtn.textContent = "隱藏所有負向心情";
+    hideNegBtn.addEventListener("click", function(){
+      moods.forEach(function(m){ if(m.category === "neg") exportHidden[m.key] = true; });
+      renderExportSection();
+    });
+    var showAllBtn = document.createElement("button");
+    showAllBtn.type = "button"; showAllBtn.className = "choice-chip";
+    showAllBtn.textContent = "全部顯示";
+    showAllBtn.addEventListener("click", function(){ exportHidden = {}; renderExportSection(); });
+    quickRow.appendChild(hideNegBtn);
+    quickRow.appendChild(showAllBtn);
+
+    var wrap = document.getElementById("exportMoodChecks");
+    wrap.innerHTML = "";
+    var groups = groupMoodsByCategory();
+    ["pos","neu","neg"].forEach(function(catKey){
+      if(!groups[catKey].length) return;
+      var label = document.createElement("p");
+      label.className = "mood-group-label";
+      label.textContent = CATEGORY_LABEL[catKey];
+      wrap.appendChild(label);
+      var row = document.createElement("div");
+      row.className = "mood-row";
+      groups[catKey].forEach(function(m){
+        var btn = document.createElement("button");
+        btn.type = "button"; btn.className = "field-toggle-chip with-icon";
+        var visible = !exportHidden[m.key];
+        btn.setAttribute("aria-pressed", visible ? "true" : "false");
+        btn.title = visible ? "會匯出" : "不會匯出";
+        btn.innerHTML = moodPillInner(m, 16);
+        btn.addEventListener("click", function(){
+          exportHidden[m.key] = !exportHidden[m.key];
+          renderExportSection();
+        });
+        row.appendChild(btn);
+      });
+      wrap.appendChild(row);
+    });
+  }
+
+  function visibleMomentsForExport(entry){
+    return entry.moments.filter(function(m){ return !exportHidden[m.moodKey]; });
+  }
+
+  function buildExportPageEl(stage, dateKey, entry, moments){
+    var d = new Date(dateKey + "T00:00:00");
+    var momentsHtml = moments.length ? moments.map(function(m){
+      var mood = getMood(m.moodKey);
+      return '<div style="margin-bottom:12pt;">' +
+        '<div style="display:flex;align-items:center;gap:6pt;margin-bottom:4pt;">' +
+          (mood.image ? '<img src="'+mood.image+'" style="width:15pt;height:15pt;object-fit:contain;">' : '') +
+          '<span style="font-size:10pt;font-weight:600;color:'+mood.color+';">'+escapeHtml(mood.label)+'</span>' +
+        '</div>' +
+        '<div style="font-size:10.5pt;line-height:1.75;white-space:pre-wrap;color:#2B2A28;">'+escapeHtml(m.text)+'</div>' +
+      '</div>';
+    }).join("") : '<p style="font-size:10pt;color:#9B9689;">(這段心情已被隱藏)</p>';
+
+    var photosHtml = "";
+    if(entry.photos && entry.photos.length){
+      photosHtml = '<div style="display:flex;gap:6pt;margin-top:auto;padding-top:12pt;">' +
+        entry.photos.map(function(p){ return '<div style="flex:1;height:42mm;overflow:hidden;border-radius:4pt;"><img src="'+p+'" style="width:100%;height:100%;object-fit:cover;display:block;"></div>'; }).join("") +
+      '</div>';
+    }
+
+    stage.innerHTML =
+      '<div style="width:148mm;height:210mm;box-sizing:border-box;padding:18mm 15mm 14mm;background:#FBF9F4;color:#2B2A28;font-family:\'Work Sans\',sans-serif;display:flex;flex-direction:column;">' +
+        '<div style="font-family:\'Fraunces\',serif;font-weight:600;font-size:18pt;letter-spacing:-.01em;">'+escapeHtml(longFmt.format(d))+'</div>' +
+        '<div style="height:1pt;background:#DAD4C6;margin:10pt 0 16pt;"></div>' +
+        '<div style="flex:1;min-height:0;overflow:hidden;">'+momentsHtml+'</div>' +
+        photosHtml +
+      '</div>';
+    return stage.firstChild;
+  }
+
+  function generateDiaryPdf(){
+    var statusEl = document.getElementById("exportStatus");
+    var btn = document.getElementById("exportPdfBtn");
+    if(!window.html2canvas || !window.jspdf){
+      statusEl.textContent = "匯出功能載入失敗,請檢查網路連線後重新整理頁面";
+      return;
+    }
+    var dateKeys = Object.keys(entries).sort();
+    var pages = [];
+    dateKeys.forEach(function(k){
+      var entry = entries[k];
+      var moments = visibleMomentsForExport(entry);
+      var hasPhotos = entry.photos && entry.photos.length > 0;
+      if(moments.length === 0 && !hasPhotos) return;
+      pages.push({key:k, entry:entry, moments:moments});
+    });
+    if(pages.length === 0){
+      statusEl.textContent = "沒有符合條件的日記可以匯出";
+      return;
+    }
+
+    btn.disabled = true;
+    var jsPDF = window.jspdf.jsPDF;
+    var doc = new jsPDF({unit:"mm", format:"a5", orientation:"portrait"});
+    var stage = document.createElement("div");
+    stage.style.position = "fixed";
+    stage.style.left = "-9999px";
+    stage.style.top = "0";
+    document.body.appendChild(stage);
+
+    var idx = 0;
+    function nextPage(){
+      if(idx >= pages.length){
+        document.body.removeChild(stage);
+        doc.save("心情日記.pdf");
+        statusEl.textContent = "已匯出 "+pages.length+" 頁 ✓";
+        btn.disabled = false;
+        return;
+      }
+      statusEl.textContent = "匯出中⋯⋯("+(idx+1)+"/"+pages.length+")";
+      var page = pages[idx];
+      var node = buildExportPageEl(stage, page.key, page.entry, page.moments);
+      html2canvas(node, {scale:2, useCORS:true, backgroundColor:"#FBF9F4"}).then(function(canvas){
+        if(idx > 0) doc.addPage("a5", "portrait");
+        var imgData = canvas.toDataURL("image/jpeg", 0.85);
+        doc.addImage(imgData, "JPEG", 0, 0, 148, 210);
+        idx++;
+        nextPage();
+      }).catch(function(e){
+        console.warn("export page failed", page.key, e);
+        idx++;
+        nextPage();
+      });
+    }
+    nextPage();
+  }
+  document.getElementById("exportPdfBtn").addEventListener("click", generateDiaryPdf);
+
   /* ---------- screen switching ---------- */
   var SCREEN_EL = {write:"screenWrite", review:"screenReview", explore:"screenExplore", budget:"screenBudget", settings:"screenSettings"};
   function switchScreen(name){
@@ -1497,7 +1649,7 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     if(name==="review"){ renderRecallGrid(); renderCalendar(); }
     if(name==="explore") renderExplore();
     if(name==="budget") renderBudget();
-    if(name==="settings"){ renderMoodLibrary(); renderSyncStatus(); }
+    if(name==="settings"){ renderMoodLibrary(); renderSyncStatus(); renderExportSection(); }
     var vp = document.querySelector(".screen-viewport");
     if(vp) vp.scrollTop = 0;
   }
