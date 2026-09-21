@@ -401,6 +401,16 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
           <div id="storageStatsWrap"></div>
         </div>
         <div class="section">
+          <div class="section-head"><h2 class="section-title">💾 完整備份</h2></div>
+          <p class="mood-image-hint" style="margin-bottom:10px;">把日記、心情、記帳、同步碼全部打包成一個檔案存到你的裝置裡。用途:自己留一份保險、之後想換別的資料庫、或同步碼弄丟時拿來還原。</p>
+          <div class="save-row" style="gap:8px;flex-wrap:wrap;">
+            <button type="button" class="editor-save-btn" id="exportBackupBtn">匯出備份</button>
+            <button type="button" class="editor-delete-btn" id="importBackupBtn">匯入備份</button>
+          </div>
+          <input type="file" id="backupFileInput" accept="application/json" hidden>
+          <p class="editor-msg" id="backupStatus" style="margin-top:8px;"></p>
+        </div>
+        <div class="section">
           <div class="section-head"><h2 class="section-title">🧹 清除示範資料</h2></div>
           <p class="mood-image-hint" style="margin-bottom:10px;">把一開始展示用的範例日記、照片、人物、記帳都清掉,只留你自己寫的內容。可以放心多按幾次,已經清過的話不會有影響。</p>
           <button type="button" class="editor-delete-btn" id="cleanupDemoBtn">清除示範資料</button>
@@ -751,6 +761,72 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     }
     wrap.innerHTML = html;
   }
+
+  /* ---------- full JSON backup / restore ---------- */
+  function exportJsonBackup(){
+    var backup = {
+      app: "moodDiary", backupVersion: 1, exportedAt: new Date().toISOString(),
+      syncCode: syncCode || null,
+      entries: entries, moods: moods, budget: budget, categories: categories
+    };
+    var json = JSON.stringify(backup, null, 2);
+    var blob = new Blob([json], {type:"application/json"});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = "心情日記備份_" + todayKey + ".json";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 2000);
+    document.getElementById("backupStatus").textContent = "已下載備份檔 ✓";
+    showToast("已下載備份檔 ✓");
+  }
+
+  function importJsonBackup(file){
+    var statusEl = document.getElementById("backupStatus");
+    var reader = new FileReader();
+    reader.onload = function(){
+      var backup;
+      try{ backup = JSON.parse(reader.result); }
+      catch(e){ statusEl.textContent = "這個檔案讀不出來,確認一下是不是備份檔"; return; }
+      if(!backup || backup.app !== "moodDiary"){
+        statusEl.textContent = "這個檔案看起來不是心情日記的備份檔";
+        return;
+      }
+      var when = backup.exportedAt ? new Date(backup.exportedAt).toLocaleString("zh-TW") : "未知時間";
+      if(!confirm("要用這份備份("+when+")取代目前的資料嗎?目前這台裝置(以及雲端,如果有連同步碼)的內容會被覆蓋掉。")) return;
+
+      entries = backup.entries || {};
+      moods = (backup.moods && backup.moods.length) ? backup.moods : DEFAULT_MOODS.slice();
+      budget = backup.budget || {expenses:[]};
+      categories = (backup.categories && backup.categories.length) ? backup.categories : DEFAULT_CATEGORIES.slice();
+      rebuildMoodMap(); rebuildCategoryMap();
+      saveEntries(); saveMoods(); saveBudget(); saveCategories();
+
+      if(cloudReady && syncCode){
+        cloudPush("moods", {list: moods});
+        cloudPush("budget", {expenses: budget.expenses});
+        cloudPush("categories", {list: categories});
+        Object.keys(entries).forEach(function(dk){ cloudSyncEntry(dk, entries[dk]); });
+      }
+
+      loadDraftForActiveDate();
+      updateStats(); renderComposer(); renderRecallGrid(); renderCalendar();
+      renderExplore(); renderBudget(); renderMoodLibrary(); renderStorageStats();
+      statusEl.textContent = "備份已還原 ✓";
+      showToast("備份已還原 ✓");
+    };
+    reader.onerror = function(){ statusEl.textContent = "讀取檔案失敗,再試一次"; };
+    reader.readAsText(file);
+  }
+  document.getElementById("exportBackupBtn").addEventListener("click", exportJsonBackup);
+  document.getElementById("importBackupBtn").addEventListener("click", function(){ document.getElementById("backupFileInput").click(); });
+  document.getElementById("backupFileInput").addEventListener("change", function(){
+    var file = this.files && this.files[0];
+    if(file) importJsonBackup(file);
+    this.value = "";
+  });
 
   function createSyncCode(){
     syncCode = generateSyncCode();
