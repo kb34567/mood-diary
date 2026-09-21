@@ -717,7 +717,9 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     if(!wrap) return;
     var s = computeStorageStats();
     if(s.dayCount === 0){
-      wrap.innerHTML = '<p class="explore-empty">還沒有任何資料。</p>';
+      wrap.innerHTML = !syncCode
+        ? '<p class="explore-empty">這台裝置目前沒有資料,也還沒連上同步碼。如果你之前在別的地方寫過日記,先到上面「雲端同步」輸入那組碼,資料才會顯示出來——不會是真的被清空了。</p>'
+        : '<p class="explore-empty">這組同步碼底下還沒有任何資料。</p>';
       return;
     }
     var pct = (s.total / FIRESTORE_FREE_BYTES * 100);
