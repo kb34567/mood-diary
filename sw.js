@@ -1,4 +1,4 @@
-var CACHE_NAME = "mood-diary-v1";
+var CACHE_NAME = "mood-diary-v2";
 var ASSETS = [
   "./",
   "index.html",
@@ -38,18 +38,19 @@ self.addEventListener("activate", function(event){
   self.clients.claim();
 });
 
+// Network-first: always try to get the latest version when online, and only
+// fall back to the cached copy if the network request fails (offline).
 self.addEventListener("fetch", function(event){
   if(event.request.method !== "GET") return;
   event.respondWith(
-    caches.match(event.request).then(function(cached){
-      var fetchPromise = fetch(event.request).then(function(resp){
-        if(resp && resp.status === 200){
-          var respClone = resp.clone();
-          caches.open(CACHE_NAME).then(function(cache){ cache.put(event.request, respClone); });
-        }
-        return resp;
-      }).catch(function(){ return cached; });
-      return cached || fetchPromise;
+    fetch(event.request).then(function(resp){
+      if(resp && resp.status === 200){
+        var respClone = resp.clone();
+        caches.open(CACHE_NAME).then(function(cache){ cache.put(event.request, respClone); });
+      }
+      return resp;
+    }).catch(function(){
+      return caches.match(event.request);
     })
   );
 });
