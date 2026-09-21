@@ -397,6 +397,10 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
           <div id="syncStatusWrap"></div>
         </div>
         <div class="section">
+          <div class="section-head"><h2 class="section-title">📊 儲存空間</h2></div>
+          <div id="storageStatsWrap"></div>
+        </div>
+        <div class="section">
           <div class="section-head"><h2 class="section-title">🧹 清除示範資料</h2></div>
           <p class="mood-image-hint" style="margin-bottom:10px;">把一開始展示用的範例日記、照片、人物、記帳都清掉,只留你自己寫的內容。可以放心多按幾次,已經清過的話不會有影響。</p>
           <button type="button" class="editor-delete-btn" id="cleanupDemoBtn">清除示範資料</button>
@@ -487,6 +491,22 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     return s.replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; });
   }
   function fmtMoney(n){ return "NT$" + Math.round(n).toLocaleString("zh-TW"); }
+  function fmtBytes(n){
+    if(n < 1024) return n + " B";
+    if(n < 1024*1024) return (n/1024).toFixed(1) + " KB";
+    return (n/1024/1024).toFixed(2) + " MB";
+  }
+  function dataUriBytes(dataUri){
+    if(!dataUri) return 0;
+    var comma = dataUri.indexOf(",");
+    if(comma === -1) return dataUri.length;
+    if(dataUri.indexOf(";base64,") !== -1){
+      var b64 = dataUri.slice(comma+1);
+      var padding = b64.slice(-2)==="==" ? 2 : (b64.slice(-1)==="=" ? 1 : 0);
+      return Math.max(0, Math.round(b64.length * 3/4) - padding);
+    }
+    return dataUri.length - comma - 1; // URL-encoded (e.g. inline svg placeholders) -- rough estimate
+  }
   function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
   function compressImage(file, maxDim, quality){
     return new Promise(function(resolve, reject){
@@ -645,6 +665,75 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
         }
       });
     }
+  }
+
+  // Firestore doesn't expose "how much have I stored" to a plain client SDK, so this is
+  // computed locally from the same data that gets pushed to the cloud -- an accurate stand-in
+  // as long as this device is up to date with its sync code.
+  var FIRESTORE_FREE_BYTES = 1024*1024*1024; // 1 GiB Spark plan limit
+  var FIRESTORE_DOC_LIMIT = 1024*1024; // 1 MiB per document
+  function computeStorageStats(){
+    var photoBytes = 0, textBytes = 0, photoCount = 0, dayCount = 0;
+    var maxDaySize = 0, maxDayKey = null;
+    Object.keys(entries).forEach(function(dateKey){
+      var entry = entries[dateKey];
+      dayCount++;
+      var daySize = 0;
+      (entry.photos || []).forEach(function(p){
+        var b = dataUriBytes(p);
+        photoBytes += b; daySize += b; photoCount++;
+      });
+      var tBytes = new Blob([JSON.stringify(entry.moments || [])]).size;
+      textBytes += tBytes; daySize += tBytes;
+      if(daySize > maxDaySize){ maxDaySize = daySize; maxDayKey = dateKey; }
+    });
+    var moodsBytes = new Blob([JSON.stringify(moods)]).size;
+    var budgetBytes = new Blob([JSON.stringify(budget)]).size;
+    var categoriesBytes = new Blob([JSON.stringify(categories)]).size;
+    var settingsBytes = moodsBytes + budgetBytes + categoriesBytes;
+    return {
+      photoBytes: photoBytes, textBytes: textBytes, settingsBytes: settingsBytes,
+      total: photoBytes + textBytes + settingsBytes,
+      photoCount: photoCount, dayCount: dayCount,
+      maxDaySize: maxDaySize, maxDayKey: maxDayKey
+    };
+  }
+  function renderStorageStats(){
+    var wrap = document.getElementById("storageStatsWrap");
+    if(!wrap) return;
+    var s = computeStorageStats();
+    if(s.dayCount === 0){
+      wrap.innerHTML = '<p class="explore-empty">還沒有任何資料。</p>';
+      return;
+    }
+    var pct = (s.total / FIRESTORE_FREE_BYTES * 100);
+    var pctLabel = pct < 0.01 ? "< 0.01%" : pct.toFixed(pct < 1 ? 3 : 1) + "%";
+    var rows = [
+      {label:"照片", amount:s.photoBytes, color:"#8A63C7", sub:s.photoCount+" 張"},
+      {label:"文字內容", amount:s.textBytes, color:"#299B68", sub:s.dayCount+" 天"},
+      {label:"其他設定", amount:s.settingsBytes, color:"#D79C1B", sub:""}
+    ];
+    var maxAmt = Math.max.apply(null, rows.map(function(r){return r.amount;})) || 1;
+    var html =
+      '<span class="budget-total-label">已使用(雲端免費額度 1GB 的 '+pctLabel+')</span>' +
+      '<p class="budget-total">'+fmtBytes(s.total)+'</p>';
+    rows.forEach(function(r){
+      if(r.amount === 0 && r.label !== "文字內容") return;
+      html += '<div class="breakdown-row">' +
+        '<span class="breakdown-label">'+r.label+'</span>' +
+        '<span class="breakdown-bar-track"><span class="breakdown-bar-fill" style="width:'+Math.round(r.amount/maxAmt*100)+'%;background:'+r.color+';"></span></span>' +
+        '<span class="breakdown-amount">'+fmtBytes(r.amount)+'</span>' +
+      '</div>';
+    });
+    if(s.maxDayKey){
+      var d = new Date(s.maxDayKey + "T00:00:00");
+      html += '<p class="mood-image-hint" style="margin-top:10px;">占用最多的一天:'+shortFmt.format(d)+'('+fmtBytes(s.maxDaySize)+')';
+      if(s.maxDaySize > FIRESTORE_DOC_LIMIT * 0.8){
+        html += ' — 接近單日 1MB 的雲端上限了,建議精簡一下那天的照片';
+      }
+      html += '</p>';
+    }
+    wrap.innerHTML = html;
   }
 
   function createSyncCode(){
@@ -1989,7 +2078,7 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     if(name==="review"){ renderRecallGrid(); renderCalendar(); }
     if(name==="explore") renderExplore();
     if(name==="budget") renderBudget();
-    if(name==="settings"){ renderMoodLibrary(); renderSyncStatus(); renderExportSection(); }
+    if(name==="settings"){ renderMoodLibrary(); renderSyncStatus(); renderStorageStats(); renderExportSection(); }
     var vp = document.querySelector(".screen-viewport");
     if(vp) vp.scrollTop = 0;
   }
