@@ -1853,14 +1853,18 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
   function recompressAllPhotos(){
     var statusEl = document.getElementById("recompressStatus");
     var btn = document.getElementById("recompressBtn");
+    // Skip anything already reasonably small: re-encoding a JPEG through canvas is lossy
+    // every time, so blindly reprocessing everything would quietly degrade quality a little
+    // more on every run instead of being a one-time fix for old, oversized photos.
+    var ALREADY_FINE = 400000; // ~300KB of actual image bytes
     var jobs = [];
     Object.keys(entries).forEach(function(dateKey){
       (entries[dateKey].photos || []).forEach(function(photo, idx){
-        jobs.push({dateKey:dateKey, idx:idx});
+        if(photo && photo.length > ALREADY_FINE){ jobs.push({dateKey:dateKey, idx:idx}); }
       });
     });
     if(jobs.length === 0){
-      statusEl.textContent = "沒有照片需要處理";
+      statusEl.textContent = "沒有需要處理的照片,都已經是合理大小了 ✓";
       return;
     }
     btn.disabled = true;
@@ -1871,7 +1875,7 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
         Object.keys(changedDays).forEach(function(dk){ cloudSyncEntry(dk, entries[dk]); });
         if(Object.keys(changedDays).length) saveEntries();
         renderRecallGrid(); renderCalendar(); renderExplore();
-        statusEl.textContent = "處理完成:"+jobs.length+" 張照片,"+shrunk+" 張變小了"+(failed?"、"+failed+" 張處理失敗":"");
+        statusEl.textContent = "檢查了 "+jobs.length+" 張偏大的照片,"+shrunk+" 張縮小了"+(failed?"、"+failed+" 張處理失敗":"");
         btn.disabled = false;
         return;
       }
