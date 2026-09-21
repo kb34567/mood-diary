@@ -577,16 +577,30 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     }
   }catch(e){ cloudReady = false; }
 
+  var CLOUD_META_LABEL = {moods:"心情設定", budget:"記帳資料", categories:"記帳分類"};
   function cloudBase(){ return cloudDb.collection("syncCodes").doc(syncCode); }
   function cloudPush(name, data){
     if(!cloudReady || !syncCode) return;
-    cloudBase().collection("meta").doc(name).set(data).catch(function(e){ console.warn("cloud push failed", name, e); });
+    cloudBase().collection("meta").doc(name).set(data).catch(function(e){
+      console.warn("cloud push failed", name, e);
+      showToast((CLOUD_META_LABEL[name]||name)+"雲端同步失敗,本機還是有存 ✓", true);
+    });
   }
   function cloudSyncEntry(dateKey, entryOrNull){
     if(!cloudReady || !syncCode) return;
     var ref = cloudBase().collection("entries").doc(dateKey);
-    if(entryOrNull){ ref.set(entryOrNull).catch(function(e){ console.warn("cloud entry push failed", e); }); }
-    else{ ref.delete().catch(function(e){ console.warn("cloud entry delete failed", e); }); }
+    var label = shortFmt.format(new Date(dateKey + "T00:00:00"));
+    if(entryOrNull){
+      ref.set(entryOrNull).catch(function(e){
+        console.warn("cloud entry push failed", e);
+        showToast(label+" 雲端同步失敗(可能是照片太大),本機還是有存 ✓", true);
+      });
+    } else {
+      ref.delete().catch(function(e){
+        console.warn("cloud entry delete failed", e);
+        showToast(label+" 雲端刪除失敗,可以到設定重新整理後再試一次", true);
+      });
+    }
   }
   function cloudLoadAll(){
     if(!cloudReady || !syncCode) return Promise.resolve(false);
@@ -1384,6 +1398,11 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
         showToast("先新增一段心情記事,或加張照片吧", true);
       }
       return;
+    }
+    var estimatedBytes = photos.reduce(function(sum,p){ return sum + dataUriBytes(p); }, 0) + new Blob([JSON.stringify(momentsToSave)]).size;
+    if(estimatedBytes > 900000){
+      var proceed = confirm("這天的內容偏大(約 "+fmtBytes(estimatedBytes)+"),雲端單日上限是 1MB,雲端同步可能會失敗。本機還是會存起來,要繼續儲存嗎?(可以按取消回去刪一張照片)");
+      if(!proceed) return;
     }
     entries[key] = {date:key, moments:momentsToSave, photos:photos};
     var ok = saveEntries();
