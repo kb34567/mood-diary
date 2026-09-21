@@ -14,6 +14,8 @@
 <link rel="icon" href="icon-192.png" type="image/png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
 <style>
 :root{
   --bg:#E4E1D6;
@@ -119,10 +121,6 @@ button#addMomentBtn:focus-visible{outline:2px solid var(--accent);outline-offset
 .photo-slot .plus{font-size:20px;line-height:1;color:var(--accent);}
 .photo-remove{position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:rgba(20,18,14,.62);color:#fff;border:none;font-size:12px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;}
 
-.video-slot{position:relative;border-radius:12px;border:1.5px dashed var(--border);background:var(--surface);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text-dim);font-size:12.5px;gap:6px;padding:14px;margin-bottom:6px;}
-.video-slot.filled{border-style:solid;justify-content:flex-start;cursor:default;}
-.video-slot-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);}
-.video-note{font-size:10.5px;color:var(--text-dim);margin:0 0 14px;}
 
 .save-row{display:flex;align-items:center;gap:12px;}
 button#saveBtn{font-family:"Work Sans",sans-serif;font-weight:600;font-size:14px;color:#fff;background:var(--accent);border:none;border-radius:100px;padding:11px 22px;cursor:pointer;}
@@ -252,7 +250,6 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
 .modal-text{font-size:14px;line-height:1.75;margin:0 0 6px;white-space:pre-wrap;}
 .modal-photos{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px;}
 .modal-photos img{width:100%;aspect-ratio:1/1;object-fit:cover;border-radius:10px;display:block;max-width:100%;}
-.modal-video{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text-dim);margin-top:10px;padding:9px 11px;border:1px solid var(--border);border-radius:10px;background:var(--surface);}
 .modal-empty{display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;padding:20px 6px 6px;}
 .modal-empty-emoji{font-size:30px;}
 .modal-empty-title{font-family:"Fraunces",serif;font-weight:600;font-size:15px;margin:0;}
@@ -315,11 +312,6 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
           <p class="picker-label">照片(最多三張)</p>
           <div class="photo-slots" id="photoSlots"></div>
           <input type="file" id="photoInput" accept="image/*" hidden>
-
-          <p class="picker-label">影片(選填)</p>
-          <div id="videoSlotWrap"></div>
-          <input type="file" id="videoInput" accept="video/*" hidden>
-          <p class="video-note">示範版本僅記錄影片檔名,不會實際儲存內容。</p>
 
           <div class="save-row">
             <button id="saveBtn" type="button">儲存這天</button>
@@ -390,6 +382,10 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
       </section>
 
       <section class="screen" data-screen="settings" id="screenSettings" hidden>
+        <div class="section">
+          <div class="section-head"><h2 class="section-title">☁️ 雲端同步</h2></div>
+          <div id="syncStatusWrap"></div>
+        </div>
         <div class="section" style="border-bottom:none;">
           <div class="section-head"><h2 class="section-title">表情倉庫</h2><span class="section-hint">新增 · 編輯心情</span></div>
           <div class="choice-row" id="moodFilterRow"></div>
@@ -461,9 +457,150 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
   }
   function fmtMoney(n){ return "NT$" + Math.round(n).toLocaleString("zh-TW"); }
   function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
+  function compressImage(file, maxDim, quality){
+    return new Promise(function(resolve, reject){
+      var reader = new FileReader();
+      reader.onload = function(){
+        var img = new Image();
+        img.onload = function(){
+          var w = img.width, h = img.height;
+          var scale = Math.min(1, maxDim / Math.max(w, h));
+          var cw = Math.max(1, Math.round(w * scale));
+          var ch = Math.max(1, Math.round(h * scale));
+          var canvas = document.createElement("canvas");
+          canvas.width = cw; canvas.height = ch;
+          var ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, cw, ch);
+          try{ resolve(canvas.toDataURL("image/jpeg", quality)); }
+          catch(e){ reject(e); }
+        };
+        img.onerror = reject;
+        img.src = reader.result;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
 
   var TODAY = new Date();
   var todayKey = fmtKey(TODAY);
+
+  /* ---------- cloud sync (Firebase Firestore) ---------- */
+  // Paste your Firebase project's web config here (Firebase console → Project settings → Your apps → SDK setup and configuration).
+  var FIREBASE_CONFIG = {
+    apiKey: "",
+    authDomain: "",
+    projectId: "",
+    storageBucket: "",
+    messagingSenderId: "",
+    appId: ""
+  };
+  var SYNC_CODE_KEY = "moodDiary.syncCode";
+  var syncCode = localStorage.getItem(SYNC_CODE_KEY) || null;
+  var cloudDb = null;
+  var cloudReady = false;
+  try{
+    if(window.firebase && FIREBASE_CONFIG.apiKey){
+      firebase.initializeApp(FIREBASE_CONFIG);
+      cloudDb = firebase.firestore();
+      cloudReady = true;
+    }
+  }catch(e){ cloudReady = false; }
+
+  function cloudBase(){ return cloudDb.collection("syncCodes").doc(syncCode); }
+  function cloudPush(name, data){
+    if(!cloudReady || !syncCode) return;
+    cloudBase().collection("meta").doc(name).set(data).catch(function(e){ console.warn("cloud push failed", name, e); });
+  }
+  function cloudSyncEntry(dateKey, entryOrNull){
+    if(!cloudReady || !syncCode) return;
+    var ref = cloudBase().collection("entries").doc(dateKey);
+    if(entryOrNull){ ref.set(entryOrNull).catch(function(e){ console.warn("cloud entry push failed", e); }); }
+    else{ ref.delete().catch(function(e){ console.warn("cloud entry delete failed", e); }); }
+  }
+  function cloudLoadAll(){
+    if(!cloudReady || !syncCode) return Promise.resolve(false);
+    var base = cloudBase();
+    return Promise.all([
+      base.collection("meta").doc("moods").get(),
+      base.collection("meta").doc("budget").get(),
+      base.collection("meta").doc("categories").get(),
+      base.collection("entries").get()
+    ]).then(function(results){
+      var moodsDoc = results[0], budgetDoc = results[1], catDoc = results[2], entriesSnap = results[3];
+      var gotAny = false;
+      if(moodsDoc.exists && moodsDoc.data().list){ moods = moodsDoc.data().list; try{ localStorage.setItem(MOODS_KEY, JSON.stringify(moods)); }catch(e){} rebuildMoodMap(); gotAny = true; }
+      if(budgetDoc.exists && budgetDoc.data().expenses){ budget = {expenses: budgetDoc.data().expenses}; try{ localStorage.setItem(BUDGET_KEY, JSON.stringify(budget)); }catch(e){} gotAny = true; }
+      if(catDoc.exists && catDoc.data().list){ categories = catDoc.data().list; try{ localStorage.setItem(CATEGORIES_KEY, JSON.stringify(categories)); }catch(e){} rebuildCategoryMap(); gotAny = true; }
+      if(!entriesSnap.empty){
+        var newEntries = {};
+        entriesSnap.forEach(function(doc){ newEntries[doc.id] = doc.data(); });
+        entries = newEntries;
+        try{ localStorage.setItem(ENTRIES_KEY, JSON.stringify(entries)); }catch(e){}
+        gotAny = true;
+      }
+      return gotAny;
+    }).catch(function(e){ console.warn("cloud load failed", e); return false; });
+  }
+  function generateSyncCode(){
+    var chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    var out = "";
+    for(var i=0;i<16;i++){ out += chars[Math.floor(Math.random()*chars.length)]; if(i===3||i===7||i===11) out += "-"; }
+    return out;
+  }
+
+  function renderSyncStatus(){
+    var wrap = document.getElementById("syncStatusWrap");
+    if(!wrap) return;
+    if(!cloudReady){
+      wrap.innerHTML = '<p class="explore-empty">雲端同步還沒設定好(需要先在程式裡填入 Firebase 專案設定)。</p>';
+      return;
+    }
+    if(!syncCode){
+      wrap.innerHTML =
+        '<p class="mood-image-hint" style="margin-bottom:10px;">還沒有設定同步碼。建立一組後,在其他裝置輸入同一組碼,就能看到同一份日記、心情、記帳資料。</p>' +
+        '<button type="button" class="editor-save-btn" id="createSyncCodeBtn">建立同步碼並開始同步</button>' +
+        '<p class="mood-image-hint" style="margin:14px 0 6px;">或者,如果你已經在別的裝置建立過:</p>' +
+        '<div class="field-input-row"><input type="text" id="joinSyncCodeInput" placeholder="輸入已有的同步碼"><button type="button" class="editor-save-btn" id="joinSyncCodeBtn">套用</button></div>' +
+        '<span class="editor-msg" id="syncMsg"></span>';
+      document.getElementById("createSyncCodeBtn").addEventListener("click", createSyncCode);
+      document.getElementById("joinSyncCodeBtn").addEventListener("click", joinSyncCode);
+    } else {
+      wrap.innerHTML =
+        '<p class="mood-image-hint" style="margin-bottom:8px;">目前的同步碼(記下來,在其他裝置輸入同一組就能同步這份資料):</p>' +
+        '<input type="text" readonly value="'+escapeHtml(syncCode)+'" onclick="this.select()" style="width:100%;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);font-family:\'IBM Plex Mono\',monospace;font-size:14px;letter-spacing:.04em;padding:9px 10px;margin-bottom:12px;">' +
+        '<p class="mood-image-hint" style="margin-bottom:6px;">要換成別台裝置上的資料,輸入那台的同步碼:</p>' +
+        '<div class="field-input-row"><input type="text" id="joinSyncCodeInput" placeholder="輸入別的同步碼"><button type="button" class="editor-save-btn" id="joinSyncCodeBtn">套用</button></div>' +
+        '<span class="editor-msg" id="syncMsg"></span>';
+      document.getElementById("joinSyncCodeBtn").addEventListener("click", joinSyncCode);
+    }
+  }
+
+  function createSyncCode(){
+    syncCode = generateSyncCode();
+    localStorage.setItem(SYNC_CODE_KEY, syncCode);
+    cloudPush("moods", {list: moods});
+    cloudPush("budget", {expenses: budget.expenses});
+    cloudPush("categories", {list: categories});
+    Object.keys(entries).forEach(function(dk){ cloudSyncEntry(dk, entries[dk]); });
+    renderSyncStatus();
+  }
+
+  function joinSyncCode(){
+    var input = document.getElementById("joinSyncCodeInput");
+    var code = input.value.trim().toUpperCase();
+    if(!code) return;
+    syncCode = code;
+    localStorage.setItem(SYNC_CODE_KEY, syncCode);
+    var msg = document.getElementById("syncMsg");
+    if(msg) msg.textContent = "同步中...";
+    cloudLoadAll().then(function(gotAny){
+      updateStats(); renderComposer(); renderRecallGrid(); renderCalendar(); renderExplore(); renderBudget(); renderMoodLibrary();
+      renderSyncStatus();
+      var msg2 = document.getElementById("syncMsg");
+      if(msg2) msg2.textContent = gotAny ? "已套用這組同步碼的資料 ✓" : "這組同步碼還沒有資料,已經開始用它同步";
+    });
+  }
 
   /* ---------- mood icons: the user's own uploaded images ---------- */
   function moodIconHTML(mood, sizePx){
@@ -499,7 +636,7 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
   var moods = [];
   var moodMap = {};
   function loadMoods(){ try{ var raw = localStorage.getItem(MOODS_KEY); return raw ? JSON.parse(raw) : null; }catch(e){ return null; } }
-  function saveMoods(){ try{ localStorage.setItem(MOODS_KEY, JSON.stringify(moods)); }catch(e){} }
+  function saveMoods(){ try{ localStorage.setItem(MOODS_KEY, JSON.stringify(moods)); }catch(e){} cloudPush("moods", {list: moods}); }
   function rebuildMoodMap(){ moodMap = {}; moods.forEach(function(m){ moodMap[m.key]=m; }); }
   function getMood(key){ return moodMap[key] || {key:key,label:"未知",image:null,color:"#9AA0A6",category:"neu"}; }
 
@@ -527,15 +664,13 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
         {moodKey:"worried", text:"下午被主管臨時追加了兩個新需求,交期沒有跟著往後延,壓力有點大。", people:[]},
         {moodKey:"great", text:"晚上跟阿翔去海邊吃了炸物,夕陽超美,心情整個被治癒了。決定以後每個月都要安排一次小旅行。", people:["阿翔"]}
       ],
-      photos: [placeholderPhoto("#f6c667","#e3956a","🌅"), placeholderPhoto("#f2b56b","#c97b3f","🍟"), placeholderPhoto("#8ab4d8","#f4e2b0","🏖️")],
-      video: {name:"海邊夕陽.mov"}
+      photos: [placeholderPhoto("#f6c667","#e3956a","🌅"), placeholderPhoto("#f2b56b","#c97b3f","🍟"), placeholderPhoto("#8ab4d8","#f4e2b0","🏖️")]
     };
     var d3 = shiftMonths(TODAY, -3);
     out[fmtKey(d3)] = {
       date: fmtKey(d3),
       moments: [{moodKey:"worried", text:"專案又被打回來重改,已經熬夜第三天了。真的很懷疑自己是不是不適合這份工作,好想放個長假。", people:[]}],
-      photos: [placeholderPhoto("#7c8fc7","#3e4c7a","💻"), placeholderPhoto("#a97a4a","#5c3d24","☕")],
-      video: null
+      photos: [placeholderPhoto("#7c8fc7","#3e4c7a","💻"), placeholderPhoto("#a97a4a","#5c3d24","☕")]
     };
     var d6 = shiftMonths(TODAY, -6);
     out[fmtKey(d6)] = {
@@ -544,8 +679,7 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
         {moodKey:"angry", text:"跟房東又吵了一架,說好的修繕拖了兩個月都沒動靜,今天真的忍不住發火了。", people:["房東"]},
         {moodKey:"calm", text:"晚上冷靜下來,寫了封信把問題一條條列清楚寄過去,心裡踏實不少。", people:[]}
       ],
-      photos: [placeholderPhoto("#b5533c","#7a3826","🏚️")],
-      video: null
+      photos: [placeholderPhoto("#b5533c","#7a3826","🏚️")]
     };
     var d12 = shiftMonths(TODAY, -12);
     out[fmtKey(d12)] = {
@@ -554,8 +688,7 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
         {moodKey:"good", text:"搬到新家滿一年了,回頭看看這一年變化好大。謝謝一路上陪我的人。", people:["家人","朋友"]},
         {moodKey:"great", text:"晚上煮了一頓飯慶祝一下,吃得很飽也很滿足。", people:["家人"]}
       ],
-      photos: [placeholderPhoto("#6e9178","#3f5c48","🏡"), placeholderPhoto("#c97b92","#8a4a5c","🍲"), placeholderPhoto("#e3a73b","#a9691f","🕯️")],
-      video: null
+      photos: [placeholderPhoto("#6e9178","#3f5c48","🏡"), placeholderPhoto("#c97b92","#8a4a5c","🍲"), placeholderPhoto("#e3a73b","#a9691f","🕯️")]
     };
     return out;
   }
@@ -579,14 +712,14 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
   var categories = [];
   var CATEGORY_MAP = {};
   function loadCategories(){ try{ var raw = localStorage.getItem(CATEGORIES_KEY); return raw ? JSON.parse(raw) : null; }catch(e){ return null; } }
-  function saveCategories(){ try{ localStorage.setItem(CATEGORIES_KEY, JSON.stringify(categories)); }catch(e){} }
+  function saveCategories(){ try{ localStorage.setItem(CATEGORIES_KEY, JSON.stringify(categories)); }catch(e){} cloudPush("categories", {list: categories}); }
   function rebuildCategoryMap(){ CATEGORY_MAP = {}; categories.forEach(function(c){ CATEGORY_MAP[c.key]=c; }); }
   categories = loadCategories();
   if(!categories){ categories = DEFAULT_CATEGORIES.slice(); saveCategories(); }
   rebuildCategoryMap();
 
   function loadBudget(){ try{ var raw = localStorage.getItem(BUDGET_KEY); return raw ? JSON.parse(raw) : null; }catch(e){ return null; } }
-  function saveBudget(){ try{ localStorage.setItem(BUDGET_KEY, JSON.stringify(budget)); }catch(e){} }
+  function saveBudget(){ try{ localStorage.setItem(BUDGET_KEY, JSON.stringify(budget)); }catch(e){} cloudPush("budget", {expenses: budget.expenses}); }
   function seedBudget(){
     var d = function(offset){ var x=new Date(TODAY); x.setDate(1); var daysInMonth = new Date(TODAY.getFullYear(),TODAY.getMonth()+1,0).getDate(); offset=Math.min(offset,daysInMonth); x.setDate(Math.min(offset, TODAY.getDate())); return fmtKey(x); };
     return { expenses: [
@@ -654,8 +787,6 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
   var momentsListEl = document.getElementById("momentsList");
   var photoSlotsEl = document.getElementById("photoSlots");
   var photoInputEl = document.getElementById("photoInput");
-  var videoSlotWrapEl = document.getElementById("videoSlotWrap");
-  var videoInputEl = document.getElementById("videoInput");
   var saveBtnEl = document.getElementById("saveBtn");
   var saveStatusEl = document.getElementById("saveStatus");
   var recallGridEl = document.getElementById("recallGrid");
@@ -720,8 +851,7 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     while(photos.length < 3) photos.push(null);
     draft = {
       moments: entry ? entry.moments.map(function(m){ return {moodKey:m.moodKey, text:m.text, people:(m.people||[]).slice()}; }) : [],
-      photos: photos,
-      video: entry && entry.video ? {name: entry.video.name} : null
+      photos: photos
     };
     pendingSlot = null;
     resetPicker();
@@ -845,33 +975,17 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
   photoInputEl.addEventListener("change", function(){
     var file = photoInputEl.files && photoInputEl.files[0];
     if(!file || pendingSlot === null) return;
-    var reader = new FileReader();
-    reader.onload = function(){ draft.photos[pendingSlot] = reader.result; pendingSlot = null; renderPhotoSlots(); };
-    reader.readAsDataURL(file);
+    var slot = pendingSlot;
+    compressImage(file, 1280, 0.75).then(function(dataUrl){
+      draft.photos[slot] = dataUrl;
+      pendingSlot = null;
+      renderPhotoSlots();
+    }).catch(function(){
+      var reader = new FileReader();
+      reader.onload = function(){ draft.photos[slot] = reader.result; pendingSlot = null; renderPhotoSlots(); };
+      reader.readAsDataURL(file);
+    });
     photoInputEl.value = "";
-  });
-
-  function renderVideoSlot(){
-    videoSlotWrapEl.innerHTML = "";
-    var slot = document.createElement("div");
-    if(draft.video){
-      slot.className = "video-slot filled";
-      slot.innerHTML = '<span>🎬</span><span class="video-slot-name">'+escapeHtml(draft.video.name)+'</span><button type="button" class="photo-remove" style="position:static;" aria-label="移除影片">×</button>';
-      slot.querySelector("button").addEventListener("click", function(ev){ ev.stopPropagation(); draft.video=null; renderVideoSlot(); });
-    } else {
-      slot.className = "video-slot";
-      slot.setAttribute("role","button"); slot.setAttribute("tabindex","0");
-      slot.innerHTML = '<span>🎬 ＋ 新增影片</span>';
-      slot.addEventListener("click", function(){ videoInputEl.click(); });
-    }
-    videoSlotWrapEl.appendChild(slot);
-  }
-  videoInputEl.addEventListener("change", function(){
-    var file = videoInputEl.files && videoInputEl.files[0];
-    if(!file) return;
-    draft.video = {name:file.name};
-    renderVideoSlot();
-    videoInputEl.value = "";
   });
 
   function renderComposer(){
@@ -880,7 +994,6 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     renderAddMomentButton();
     renderMomentsList();
     renderPhotoSlots();
-    renderVideoSlot();
     saveStatusEl.textContent = ""; saveStatusEl.className = "";
   }
 
@@ -1022,7 +1135,6 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
       if(entry.photos && entry.photos.length){
         html += '<div class="modal-photos">' + entry.photos.map(function(p){ return '<img src="'+p+'" alt="日記照片">'; }).join("") + '</div>';
       }
-      if(entry.video){ html += '<div class="modal-video">🎬 '+escapeHtml(entry.video.name)+'</div>'; }
       html += '<div class="modal-actions"><button type="button" id="modalEditBtn">編輯這天</button></div>';
     } else {
       html += '<div class="modal-empty"><span class="modal-empty-emoji">🌱</span><p class="modal-empty-title">這天還沒有留下日記</p>' +
@@ -1045,9 +1157,10 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     var key = activeKey();
     var photos = draft.photos.filter(Boolean);
     var momentsToSave = draft.moments.slice();
-    if(momentsToSave.length===0 && photos.length===0 && !draft.video){
+    if(momentsToSave.length===0 && photos.length===0){
       if(entries[key]){
         delete entries[key]; saveEntries();
+        cloudSyncEntry(key, null);
         saveStatusEl.textContent = "已清空這天 ✓"; saveStatusEl.className = "ok";
         updateStats(); renderRecallGrid(); renderCalendar();
       } else {
@@ -1055,8 +1168,9 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
       }
       return;
     }
-    entries[key] = {date:key, moments:momentsToSave, photos:photos, video: draft.video};
+    entries[key] = {date:key, moments:momentsToSave, photos:photos};
     var ok = saveEntries();
+    cloudSyncEntry(key, entries[key]);
     saveStatusEl.textContent = ok ? "已儲存 ✓" : "儲存失敗,照片可能太大了";
     saveStatusEl.className = ok ? "ok" : "";
     updateStats(); renderRecallGrid(); renderCalendar();
@@ -1283,9 +1397,14 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
   moodImageInputEl.addEventListener("change", function(){
     var file = moodImageInputEl.files && moodImageInputEl.files[0];
     if(!file) return;
-    var reader = new FileReader();
-    reader.onload = function(){ moodEditorDraft.image = reader.result; renderMoodEditor(); };
-    reader.readAsDataURL(file);
+    compressImage(file, 240, 0.85).then(function(dataUrl){
+      moodEditorDraft.image = dataUrl;
+      renderMoodEditor();
+    }).catch(function(){
+      var reader = new FileReader();
+      reader.onload = function(){ moodEditorDraft.image = reader.result; renderMoodEditor(); };
+      reader.readAsDataURL(file);
+    });
     moodImageInputEl.value = "";
   });
 
@@ -1377,7 +1496,7 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     if(name==="review"){ renderRecallGrid(); renderCalendar(); }
     if(name==="explore") renderExplore();
     if(name==="budget") renderBudget();
-    if(name==="settings") renderMoodLibrary();
+    if(name==="settings"){ renderMoodLibrary(); renderSyncStatus(); }
     var vp = document.querySelector(".screen-viewport");
     if(vp) vp.scrollTop = 0;
   }
@@ -1386,9 +1505,16 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
   function setClock(){ var now = new Date(); document.getElementById("clockTime").textContent = pad(now.getHours())+":"+pad(now.getMinutes()); }
   setClock();
 
-  loadDraftForActiveDate();
-  renderComposer();
-  updateStats();
+  function boot(){
+    loadDraftForActiveDate();
+    renderComposer();
+    updateStats();
+  }
+  if(syncCode && cloudReady){
+    cloudLoadAll().then(boot);
+  } else {
+    boot();
+  }
 })();
 </script>
 
