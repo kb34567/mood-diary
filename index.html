@@ -403,6 +403,12 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
           <p class="editor-msg" id="cleanupStatus" style="margin-top:8px;"></p>
         </div>
         <div class="section">
+          <div class="section-head"><h2 class="section-title">🗜️ 重新壓縮照片</h2></div>
+          <p class="mood-image-hint" style="margin-bottom:10px;">把已經存的照片重新壓縮一次(在壓縮功能上線前、或某幾次處理失敗時存進去的照片可能還是原始大小)。原本就很小的不會被放大,可以放心按。</p>
+          <button type="button" class="editor-delete-btn" id="recompressBtn">重新壓縮所有照片</button>
+          <p class="editor-msg" id="recompressStatus" style="margin-top:8px;"></p>
+        </div>
+        <div class="section">
           <div class="section-head"><h2 class="section-title">表情倉庫</h2><span class="section-hint">新增 · 編輯心情</span></div>
           <div class="choice-row" id="moodFilterRow"></div>
           <div class="mood-grid" id="moodGrid"></div>
@@ -504,6 +510,25 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
       };
       reader.onerror = reject;
       reader.readAsDataURL(file);
+    });
+  }
+  function compressDataUri(dataUri, maxDim, quality){
+    return new Promise(function(resolve, reject){
+      var img = new Image();
+      img.onload = function(){
+        var w = img.width, h = img.height;
+        var scale = Math.min(1, maxDim / Math.max(w, h));
+        var cw = Math.max(1, Math.round(w * scale));
+        var ch = Math.max(1, Math.round(h * scale));
+        var canvas = document.createElement("canvas");
+        canvas.width = cw; canvas.height = ch;
+        var ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, cw, ch);
+        try{ resolve(canvas.toDataURL("image/jpeg", quality)); }
+        catch(e){ reject(e); }
+      };
+      img.onerror = reject;
+      img.src = dataUri;
     });
   }
 
@@ -1823,6 +1848,50 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     }
   }
   document.getElementById("cleanupDemoBtn").addEventListener("click", cleanupDemoData);
+
+  /* ---------- recompress photos saved before compression existed / when it silently failed ---------- */
+  function recompressAllPhotos(){
+    var statusEl = document.getElementById("recompressStatus");
+    var btn = document.getElementById("recompressBtn");
+    var jobs = [];
+    Object.keys(entries).forEach(function(dateKey){
+      (entries[dateKey].photos || []).forEach(function(photo, idx){
+        jobs.push({dateKey:dateKey, idx:idx});
+      });
+    });
+    if(jobs.length === 0){
+      statusEl.textContent = "沒有照片需要處理";
+      return;
+    }
+    btn.disabled = true;
+    var done = 0, shrunk = 0, failed = 0;
+    var changedDays = {};
+    function next(){
+      if(done >= jobs.length){
+        Object.keys(changedDays).forEach(function(dk){ cloudSyncEntry(dk, entries[dk]); });
+        if(Object.keys(changedDays).length) saveEntries();
+        renderRecallGrid(); renderCalendar(); renderExplore();
+        statusEl.textContent = "處理完成:"+jobs.length+" 張照片,"+shrunk+" 張變小了"+(failed?"、"+failed+" 張處理失敗":"");
+        btn.disabled = false;
+        return;
+      }
+      var job = jobs[done];
+      statusEl.textContent = "處理中⋯⋯("+(done+1)+"/"+jobs.length+")";
+      var original = entries[job.dateKey].photos[job.idx];
+      compressDataUri(original, 1280, 0.75).then(function(smaller){
+        if(smaller.length < original.length){
+          entries[job.dateKey].photos[job.idx] = smaller;
+          changedDays[job.dateKey] = true;
+          shrunk++;
+        }
+      }).catch(function(){ failed++; }).then(function(){
+        done++;
+        next();
+      });
+    }
+    next();
+  }
+  document.getElementById("recompressBtn").addEventListener("click", recompressAllPhotos);
 
   /* ---------- screen switching ---------- */
   var SCREEN_EL = {write:"screenWrite", review:"screenReview", explore:"screenExplore", budget:"screenBudget", settings:"screenSettings"};
