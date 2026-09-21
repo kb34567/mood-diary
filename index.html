@@ -982,9 +982,11 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
       pendingSlot = null;
       renderPhotoSlots();
     }).catch(function(){
-      var reader = new FileReader();
-      reader.onload = function(){ draft.photos[slot] = reader.result; pendingSlot = null; renderPhotoSlots(); };
-      reader.readAsDataURL(file);
+      // Don't silently fall back to the original (uncompressed, sometimes HEIC) file --
+      // that's the one thing actually big enough to blow past storage limits.
+      pendingSlot = null;
+      saveStatusEl.textContent = "這張照片沒辦法處理,換一張試試(有些 iPhone 相簿裡的格式不支援)";
+      saveStatusEl.className = "";
     });
     photoInputEl.value = "";
   });
@@ -1175,8 +1177,13 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     var ok = saveEntries();
     cloudSyncEntry(key, entries[key]);
     var usingCloud = cloudReady && !!syncCode;
-    saveStatusEl.textContent = (ok || usingCloud) ? "已儲存 ✓" : "儲存失敗,照片可能太大了";
-    saveStatusEl.className = (ok || usingCloud) ? "ok" : "";
+    if(ok || usingCloud){
+      saveStatusEl.textContent = "已儲存 ✓";
+      saveStatusEl.className = "ok";
+    } else {
+      saveStatusEl.textContent = "本機空間已滿,請到設定開啟雲端同步";
+      saveStatusEl.className = "";
+    }
     updateStats(); renderRecallGrid(); renderCalendar();
   });
 
