@@ -1699,42 +1699,63 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     return boxOpen + '<img src="'+icon.src+'" style="width:100%;height:100%;object-fit:contain;">' + '</span>';
   }
 
-  function buildExportPageEl(stage, dateKey, entry, moments){
-    var d = new Date(dateKey + "T00:00:00");
+  // Largest-first tiers to try; buildExportPageEl steps down until the moments box
+  // no longer overflows its allotted space, instead of silently clipping long entries.
+  var EXPORT_SIZE_TIERS = [
+    {text:9.5, label:9,   icon:14, lineHeight:1.65, gap:10},
+    {text:8.5, label:8,   icon:13, lineHeight:1.55, gap:8},
+    {text:7.5, label:7.5, icon:12, lineHeight:1.48, gap:6},
+    {text:7,   label:7,   icon:11, lineHeight:1.4,  gap:5}
+  ];
+
+  function renderPageAtTier(stage, d, entry, moments, tier){
     var momentsHtml = moments.length ? moments.map(function(m){
       var mood = getMood(m.moodKey);
-      return '<div style="margin-bottom:12pt;">' +
-        '<div style="display:flex;align-items:center;gap:6pt;margin-bottom:4pt;">' +
-          moodIconHtmlForExport(mood, 15) +
-          '<span style="font-size:10pt;font-weight:600;color:'+mood.color+';">'+escapeHtml(mood.label)+'</span>' +
+      return '<div style="margin-bottom:'+tier.gap+'pt;">' +
+        '<div style="display:flex;align-items:center;gap:6pt;margin-bottom:3pt;">' +
+          moodIconHtmlForExport(mood, tier.icon) +
+          '<span style="font-size:'+tier.label+'pt;font-weight:600;color:'+mood.color+';">'+escapeHtml(mood.label)+'</span>' +
         '</div>' +
-        '<div style="font-size:10.5pt;line-height:1.75;white-space:pre-wrap;color:#2B2A28;">'+escapeHtml(m.text)+'</div>' +
+        '<div style="font-size:'+tier.text+'pt;line-height:'+tier.lineHeight+';white-space:pre-wrap;color:#2B2A28;">'+escapeHtml(m.text)+'</div>' +
       '</div>';
-    }).join("") : '<p style="font-size:10pt;color:#9B9689;">(這段心情已被隱藏)</p>';
+    }).join("") : '<p style="font-size:'+tier.text+'pt;color:#9B9689;">(這段心情已被隱藏)</p>';
 
     var photosHtml = "";
     if(entry.photos && entry.photos.length){
       // Boxes are portrait (taller than wide) since most photos people take on a phone are vertical;
       // sizing depends on the count so a lone photo isn't stretched into a short wide strip.
+      // Uses a background-image instead of <img object-fit> because html2canvas doesn't reliably
+      // honor object-fit -- with an <img> it just stretches to the box, warping any photo whose
+      // aspect ratio doesn't already match.
       var photoBox = function(w, h){ return function(p){
-        return '<div style="width:'+w+'mm;height:'+h+'mm;overflow:hidden;border-radius:4pt;flex:none;">' +
-          '<img src="'+p+'" style="width:100%;height:100%;object-fit:cover;display:block;">' +
-        '</div>';
+        return '<div style="width:'+w+'mm;height:'+h+'mm;border-radius:4pt;flex:none;background-image:url('+p+');background-size:cover;background-position:center;"></div>';
       }; };
       var dims = entry.photos.length === 1 ? [66,88] : entry.photos.length === 2 ? [52,69] : [36,48];
-      photosHtml = '<div style="display:flex;justify-content:center;gap:6mm;margin-top:auto;padding-top:12pt;">' +
+      photosHtml = '<div style="display:flex;justify-content:center;gap:6mm;margin-top:auto;padding-top:12pt;flex:none;">' +
         entry.photos.map(photoBox(dims[0], dims[1])).join("") +
       '</div>';
     }
 
     stage.innerHTML =
       '<div style="width:148mm;height:210mm;box-sizing:border-box;padding:18mm 15mm 14mm;background:#FBF9F4;color:#2B2A28;font-family:\'Work Sans\',sans-serif;display:flex;flex-direction:column;">' +
-        '<div style="font-family:\'Fraunces\',serif;font-weight:600;font-size:18pt;letter-spacing:-.01em;">'+escapeHtml(longFmt.format(d))+'</div>' +
-        '<div style="height:1pt;background:#DAD4C6;margin:10pt 0 16pt;"></div>' +
-        '<div style="flex:1;min-height:0;overflow:hidden;">'+momentsHtml+'</div>' +
+        '<div style="font-family:\'Fraunces\',serif;font-weight:600;font-size:16pt;letter-spacing:-.01em;flex:none;">'+escapeHtml(longFmt.format(d))+'</div>' +
+        '<div style="height:1pt;background:#DAD4C6;margin:9pt 0 14pt;flex:none;"></div>' +
+        '<div class="export-moments-box" style="flex:1;min-height:0;overflow:hidden;">'+momentsHtml+'</div>' +
         photosHtml +
       '</div>';
     return stage.firstChild;
+  }
+
+  function buildExportPageEl(stage, dateKey, entry, moments){
+    var d = new Date(dateKey + "T00:00:00");
+    var node = null;
+    for(var i=0; i<EXPORT_SIZE_TIERS.length; i++){
+      node = renderPageAtTier(stage, d, entry, moments, EXPORT_SIZE_TIERS[i]);
+      var box = node.querySelector(".export-moments-box");
+      var fits = box.scrollHeight <= box.clientHeight + 1;
+      if(fits || i === EXPORT_SIZE_TIERS.length - 1) break;
+    }
+    return node;
   }
 
   function generateDiaryPdf(){
