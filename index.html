@@ -392,6 +392,12 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
           <div id="syncStatusWrap"></div>
         </div>
         <div class="section">
+          <div class="section-head"><h2 class="section-title">🧹 清除示範資料</h2></div>
+          <p class="mood-image-hint" style="margin-bottom:10px;">把一開始展示用的範例日記、照片、人物、記帳都清掉,只留你自己寫的內容。可以放心多按幾次,已經清過的話不會有影響。</p>
+          <button type="button" class="editor-delete-btn" id="cleanupDemoBtn">清除示範資料</button>
+          <p class="editor-msg" id="cleanupStatus" style="margin-top:8px;"></p>
+        </div>
+        <div class="section">
           <div class="section-head"><h2 class="section-title">表情倉庫</h2><span class="section-hint">新增 · 編輯心情</span></div>
           <div class="choice-row" id="moodFilterRow"></div>
           <div class="mood-grid" id="moodGrid"></div>
@@ -669,43 +675,32 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
   function loadEntries(){ try{ var raw = localStorage.getItem(ENTRIES_KEY); return raw ? JSON.parse(raw) : null; }catch(e){ return null; } }
   function saveEntries(){ try{ localStorage.setItem(ENTRIES_KEY, JSON.stringify(entries)); return true; }catch(e){ return false; } }
 
-  function seedEntries(){
-    var out = {};
-    var d1 = shiftMonths(TODAY, -1);
-    out[fmtKey(d1)] = {
-      date: fmtKey(d1),
-      moments: [
-        {moodKey:"worried", text:"下午被主管臨時追加了兩個新需求,交期沒有跟著往後延,壓力有點大。", people:[]},
-        {moodKey:"great", text:"晚上跟阿翔去海邊吃了炸物,夕陽超美,心情整個被治癒了。決定以後每個月都要安排一次小旅行。", people:["阿翔"]}
-      ],
-      photos: [placeholderPhoto("#f6c667","#e3956a","🌅"), placeholderPhoto("#f2b56b","#c97b3f","🍟"), placeholderPhoto("#8ab4d8","#f4e2b0","🏖️")]
-    };
-    var d3 = shiftMonths(TODAY, -3);
-    out[fmtKey(d3)] = {
-      date: fmtKey(d3),
-      moments: [{moodKey:"worried", text:"專案又被打回來重改,已經熬夜第三天了。真的很懷疑自己是不是不適合這份工作,好想放個長假。", people:[]}],
-      photos: [placeholderPhoto("#7c8fc7","#3e4c7a","💻"), placeholderPhoto("#a97a4a","#5c3d24","☕")]
-    };
-    var d6 = shiftMonths(TODAY, -6);
-    out[fmtKey(d6)] = {
-      date: fmtKey(d6),
-      moments: [
-        {moodKey:"angry", text:"跟房東又吵了一架,說好的修繕拖了兩個月都沒動靜,今天真的忍不住發火了。", people:["房東"]},
-        {moodKey:"calm", text:"晚上冷靜下來,寫了封信把問題一條條列清楚寄過去,心裡踏實不少。", people:[]}
-      ],
-      photos: [placeholderPhoto("#b5533c","#7a3826","🏚️")]
-    };
-    var d12 = shiftMonths(TODAY, -12);
-    out[fmtKey(d12)] = {
-      date: fmtKey(d12),
-      moments: [
-        {moodKey:"good", text:"搬到新家滿一年了,回頭看看這一年變化好大。謝謝一路上陪我的人。", people:["家人","朋友"]},
-        {moodKey:"great", text:"晚上煮了一頓飯慶祝一下,吃得很飽也很滿足。", people:["家人"]}
-      ],
-      photos: [placeholderPhoto("#6e9178","#3f5c48","🏡"), placeholderPhoto("#c97b92","#8a4a5c","🍲"), placeholderPhoto("#e3a73b","#a9691f","🕯️")]
-    };
-    return out;
-  }
+  // Fingerprints of the original demo content, kept only so cleanupDemoData() can find
+  // and remove it from devices/clouds that already received it. New installs start empty.
+  var DEMO_MOMENT_TEXTS = [
+    "下午被主管臨時追加了兩個新需求,交期沒有跟著往後延,壓力有點大。",
+    "晚上跟阿翔去海邊吃了炸物,夕陽超美,心情整個被治癒了。決定以後每個月都要安排一次小旅行。",
+    "專案又被打回來重改,已經熬夜第三天了。真的很懷疑自己是不是不適合這份工作,好想放個長假。",
+    "跟房東又吵了一架,說好的修繕拖了兩個月都沒動靜,今天真的忍不住發火了。",
+    "晚上冷靜下來,寫了封信把問題一條條列清楚寄過去,心裡踏實不少。",
+    "搬到新家滿一年了,回頭看看這一年變化好大。謝謝一路上陪我的人。",
+    "晚上煮了一頓飯慶祝一下,吃得很飽也很滿足。"
+  ];
+  var DEMO_PHOTO_URIS = [
+    placeholderPhoto("#f6c667","#e3956a","🌅"), placeholderPhoto("#f2b56b","#c97b3f","🍟"), placeholderPhoto("#8ab4d8","#f4e2b0","🏖️"),
+    placeholderPhoto("#7c8fc7","#3e4c7a","💻"), placeholderPhoto("#a97a4a","#5c3d24","☕"),
+    placeholderPhoto("#b5533c","#7a3826","🏚️"),
+    placeholderPhoto("#6e9178","#3f5c48","🏡"), placeholderPhoto("#c97b92","#8a4a5c","🍲"), placeholderPhoto("#e3a73b","#a9691f","🕯️")
+  ];
+  var DEMO_EXPENSES = [
+    {categoryKey:"food", amount:320, note:"早餐店"},
+    {categoryKey:"transport", amount:150, note:"加油"},
+    {categoryKey:"kids", amount:1200, note:"畫畫課"},
+    {categoryKey:"entertainment", amount:580, note:"看電影"},
+    {categoryKey:"food", amount:450, note:"聚餐"}
+  ];
+
+  function seedEntries(){ return {}; }
 
   var entries = loadEntries();
   if(!entries){ entries = seedEntries(); saveEntries(); }
@@ -734,16 +729,7 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
 
   function loadBudget(){ try{ var raw = localStorage.getItem(BUDGET_KEY); return raw ? JSON.parse(raw) : null; }catch(e){ return null; } }
   function saveBudget(){ try{ localStorage.setItem(BUDGET_KEY, JSON.stringify(budget)); }catch(e){} cloudPush("budget", {expenses: budget.expenses}); }
-  function seedBudget(){
-    var d = function(offset){ var x=new Date(TODAY); x.setDate(1); var daysInMonth = new Date(TODAY.getFullYear(),TODAY.getMonth()+1,0).getDate(); offset=Math.min(offset,daysInMonth); x.setDate(Math.min(offset, TODAY.getDate())); return fmtKey(x); };
-    return { expenses: [
-      {id:uid(), date:d(2), categoryKey:"food", amount:320, note:"早餐店"},
-      {id:uid(), date:d(4), categoryKey:"transport", amount:150, note:"加油"},
-      {id:uid(), date:d(6), categoryKey:"kids", amount:1200, note:"畫畫課"},
-      {id:uid(), date:d(9), categoryKey:"entertainment", amount:580, note:"看電影"},
-      {id:uid(), date:d(12), categoryKey:"food", amount:450, note:"聚餐"}
-    ]};
-  }
+  function seedBudget(){ return { expenses: [] }; }
   var budget = loadBudget();
   if(!budget){ budget = seedBudget(); saveBudget(); }
 
@@ -1027,7 +1013,9 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     {label:"上個月的今天", months:-1},
     {label:"三個月前的今天", months:-3},
     {label:"半年前的今天", months:-6},
-    {label:"一年前的今天", months:-12}
+    {label:"一年前的今天", months:-12},
+    {label:"兩年前的今天", months:-24},
+    {label:"三年前的今天", months:-36}
   ];
   function renderRecallGrid(){
     recallGridEl.innerHTML = "";
@@ -1682,6 +1670,49 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     }
   }
   document.getElementById("exportPdfBtn").addEventListener("click", generateDiaryPdf);
+
+  /* ---------- one-time demo data cleanup ---------- */
+  function cleanupDemoData(){
+    var removedDays = 0, changedDays = 0, removedExpenses = 0;
+    Object.keys(entries).forEach(function(dateKey){
+      var entry = entries[dateKey];
+      var beforeMoments = entry.moments.length;
+      var beforePhotos = (entry.photos || []).length;
+      var keptMoments = entry.moments.filter(function(m){ return DEMO_MOMENT_TEXTS.indexOf(m.text) === -1; });
+      var keptPhotos = (entry.photos || []).filter(function(p){ return DEMO_PHOTO_URIS.indexOf(p) === -1; });
+      var changed = keptMoments.length !== beforeMoments || keptPhotos.length !== beforePhotos;
+      if(!changed) return;
+      if(keptMoments.length === 0 && keptPhotos.length === 0){
+        delete entries[dateKey];
+        cloudSyncEntry(dateKey, null);
+        removedDays++;
+      } else {
+        entries[dateKey] = {date: dateKey, moments: keptMoments, photos: keptPhotos};
+        cloudSyncEntry(dateKey, entries[dateKey]);
+        changedDays++;
+      }
+    });
+    saveEntries();
+
+    var beforeCount = budget.expenses.length;
+    budget.expenses = budget.expenses.filter(function(e){
+      var isDemo = DEMO_EXPENSES.some(function(d){ return d.categoryKey===e.categoryKey && d.amount===e.amount && d.note===e.note; });
+      return !isDemo;
+    });
+    removedExpenses = beforeCount - budget.expenses.length;
+    if(removedExpenses > 0) saveBudget();
+
+    updateStats(); renderRecallGrid(); renderCalendar(); renderExplore(); renderBudget();
+    if(currentScreen === "write") renderComposer();
+
+    var statusEl = document.getElementById("cleanupStatus");
+    if(removedDays + changedDays + removedExpenses === 0){
+      statusEl.textContent = "沒有找到示範資料,應該已經是乾淨的了 ✓";
+    } else {
+      statusEl.textContent = "已清除 "+removedDays+" 天示範日記、"+changedDays+" 天部分內容、"+removedExpenses+" 筆示範花費 ✓";
+    }
+  }
+  document.getElementById("cleanupDemoBtn").addEventListener("click", cleanupDemoData);
 
   /* ---------- screen switching ---------- */
   var SCREEN_EL = {write:"screenWrite", review:"screenReview", explore:"screenExplore", budget:"screenBudget", settings:"screenSettings"};
