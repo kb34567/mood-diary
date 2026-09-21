@@ -587,12 +587,33 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
       document.getElementById("joinSyncCodeBtn").addEventListener("click", joinSyncCode);
     } else {
       wrap.innerHTML =
-        '<p class="mood-image-hint" style="margin-bottom:8px;">目前的同步碼(記下來,在其他裝置輸入同一組就能同步這份資料):</p>' +
-        '<input type="text" readonly value="'+escapeHtml(syncCode)+'" onclick="this.select()" style="width:100%;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);font-family:\'IBM Plex Mono\',monospace;font-size:14px;letter-spacing:.04em;padding:9px 10px;margin-bottom:12px;">' +
-        '<p class="mood-image-hint" style="margin-bottom:6px;">要換成別台裝置上的資料,輸入那台的同步碼:</p>' +
+        '<p class="editor-msg" style="color:var(--gold);margin:0 0 10px;">✓ 這台裝置正在自動同步,不用再做任何事</p>' +
+        '<p class="mood-image-hint" style="margin-bottom:6px;">你的同步碼(建議截圖或抄下來收好):</p>' +
+        '<div class="field-input-row" style="margin-bottom:6px;">' +
+          '<input type="text" readonly id="syncCodeDisplay" value="'+escapeHtml(syncCode)+'" onclick="this.select()" style="font-family:\'IBM Plex Mono\',monospace;font-size:14px;letter-spacing:.04em;">' +
+          '<button type="button" class="editor-save-btn" id="copySyncCodeBtn">複製</button>' +
+        '</div>' +
+        '<span class="editor-msg" id="copyMsg"></span>' +
+        '<p class="mood-image-hint" style="margin:12px 0 6px;">想在別的手機、平板或電腦看到同一份日記:打開這個網址 → 進設定 → 貼上這組碼 → 套用,就會抓到這份資料,不用重新設定其他東西。</p>' +
+        '<p class="picker-label" style="margin-top:14px;">切換成別組同步碼</p>' +
         '<div class="field-input-row"><input type="text" id="joinSyncCodeInput" placeholder="輸入別的同步碼"><button type="button" class="editor-save-btn" id="joinSyncCodeBtn">套用</button></div>' +
         '<span class="editor-msg" id="syncMsg"></span>';
       document.getElementById("joinSyncCodeBtn").addEventListener("click", joinSyncCode);
+      document.getElementById("copySyncCodeBtn").addEventListener("click", function(){
+        var msg = document.getElementById("copyMsg");
+        var input = document.getElementById("syncCodeDisplay");
+        input.select();
+        if(navigator.clipboard && navigator.clipboard.writeText){
+          navigator.clipboard.writeText(syncCode).then(function(){
+            msg.textContent = "已複製 ✓";
+          }).catch(function(){
+            msg.textContent = "複製失敗,請手動選取文字複製";
+          });
+        } else {
+          try{ document.execCommand("copy"); msg.textContent = "已複製 ✓"; }
+          catch(e){ msg.textContent = "複製失敗,請手動選取文字複製"; }
+        }
+      });
     }
   }
 
