@@ -1708,7 +1708,14 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     {text:7,   label:7,   icon:11, lineHeight:1.4,  gap:5}
   ];
 
-  function renderPageAtTier(stage, d, entry, moments, tier){
+  function fitsBox(node){
+    var box = node.querySelector(".export-moments-box");
+    return box.scrollHeight <= box.clientHeight + 1;
+  }
+
+  // Renders one page for an already-decided slice of a day's content (a specific list of
+  // moments plus, only on the day's final page, its photos) at a given size tier.
+  function renderPageAtTier(stage, d, moments, photos, tier, continued){
     var momentsHtml = moments.length ? moments.map(function(m){
       var mood = getMood(m.moodKey);
       return '<div style="margin-bottom:'+tier.gap+'pt;">' +
@@ -1721,7 +1728,7 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     }).join("") : '<p style="font-size:'+tier.text+'pt;color:#9B9689;">(這段心情已被隱藏)</p>';
 
     var photosHtml = "";
-    if(entry.photos && entry.photos.length){
+    if(photos && photos.length){
       // Boxes are portrait (taller than wide) since most photos people take on a phone are vertical;
       // sizing depends on the count so a lone photo isn't stretched into a short wide strip.
       // Uses a background-image instead of <img object-fit> because html2canvas doesn't reliably
@@ -1730,15 +1737,16 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
       var photoBox = function(w, h){ return function(p){
         return '<div style="width:'+w+'mm;height:'+h+'mm;border-radius:4pt;flex:none;background-image:url('+p+');background-size:cover;background-position:center;"></div>';
       }; };
-      var dims = entry.photos.length === 1 ? [66,88] : entry.photos.length === 2 ? [52,69] : [36,48];
+      var dims = photos.length === 1 ? [66,88] : photos.length === 2 ? [52,69] : [36,48];
       photosHtml = '<div style="display:flex;justify-content:center;gap:6mm;margin-top:auto;padding-top:12pt;flex:none;">' +
-        entry.photos.map(photoBox(dims[0], dims[1])).join("") +
+        photos.map(photoBox(dims[0], dims[1])).join("") +
       '</div>';
     }
 
+    var dateLabel = escapeHtml(longFmt.format(d)) + (continued ? ' <span style="font-size:11pt;color:#9B9689;font-weight:500;">(續)</span>' : '');
     stage.innerHTML =
       '<div style="width:148mm;height:210mm;box-sizing:border-box;padding:18mm 15mm 14mm;background:#FBF9F4;color:#2B2A28;font-family:\'Work Sans\',sans-serif;display:flex;flex-direction:column;">' +
-        '<div style="font-family:\'Fraunces\',serif;font-weight:600;font-size:16pt;letter-spacing:-.01em;flex:none;">'+escapeHtml(longFmt.format(d))+'</div>' +
+        '<div style="font-family:\'Fraunces\',serif;font-weight:600;font-size:16pt;letter-spacing:-.01em;flex:none;">'+dateLabel+'</div>' +
         '<div style="height:1pt;background:#DAD4C6;margin:9pt 0 14pt;flex:none;"></div>' +
         '<div class="export-moments-box" style="flex:1;min-height:0;overflow:hidden;">'+momentsHtml+'</div>' +
         photosHtml +
@@ -1746,14 +1754,48 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     return stage.firstChild;
   }
 
-  function buildExportPageEl(stage, dateKey, entry, moments){
+  // Splits one day's (already mood-filtered) moments into as many pages as it takes to show
+  // everything without clipping: keeps adding moments to a page while they still fit at the
+  // smallest tier, spills the rest onto a "(續)" continuation page, and only attaches photos
+  // to the day's last page.
+  function computeDayPages(stage, dateKey, entry, visibleMoments){
     var d = new Date(dateKey + "T00:00:00");
+    var photos = entry.photos && entry.photos.length ? entry.photos : [];
+    var smallest = EXPORT_SIZE_TIERS[EXPORT_SIZE_TIERS.length - 1];
+    var descriptors = [];
+
+    if(visibleMoments.length === 0){
+      descriptors.push({d:d, moments:[], photos:photos, continued:false});
+      return descriptors;
+    }
+
+    var idx = 0, continued = false;
+    while(idx < visibleMoments.length){
+      var isLastMomentOverall = false;
+      var take = 0;
+      for(var j=idx+1; j<=visibleMoments.length; j++){
+        var chunk = visibleMoments.slice(idx, j);
+        var isLastChunk = (j === visibleMoments.length);
+        var testPhotos = isLastChunk ? photos : [];
+        var node = renderPageAtTier(stage, d, chunk, testPhotos, smallest, continued);
+        if(fitsBox(node)){ take = j - idx; isLastMomentOverall = isLastChunk; }
+        else break;
+      }
+      if(take === 0) take = 1; // a single moment alone overflows even the smallest tier -- show it anyway, clipped, rather than drop it
+      var placed = visibleMoments.slice(idx, idx + take);
+      var placedIsLast = (idx + take) >= visibleMoments.length;
+      descriptors.push({d:d, moments:placed, photos: placedIsLast ? photos : [], continued: continued});
+      idx += take;
+      continued = true;
+    }
+    return descriptors;
+  }
+
+  function buildExportPageEl(stage, descriptor){
     var node = null;
     for(var i=0; i<EXPORT_SIZE_TIERS.length; i++){
-      node = renderPageAtTier(stage, d, entry, moments, EXPORT_SIZE_TIERS[i]);
-      var box = node.querySelector(".export-moments-box");
-      var fits = box.scrollHeight <= box.clientHeight + 1;
-      if(fits || i === EXPORT_SIZE_TIERS.length - 1) break;
+      node = renderPageAtTier(stage, descriptor.d, descriptor.moments, descriptor.photos, EXPORT_SIZE_TIERS[i], descriptor.continued);
+      if(fitsBox(node) || i === EXPORT_SIZE_TIERS.length - 1) break;
     }
     return node;
   }
@@ -1766,15 +1808,15 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
       return;
     }
     var dateKeys = Object.keys(entries).sort();
-    var pages = [];
+    var dayJobs = [];
     dateKeys.forEach(function(k){
       var entry = entries[k];
       var moments = visibleMomentsForExport(entry);
       var hasPhotos = entry.photos && entry.photos.length > 0;
       if(moments.length === 0 && !hasPhotos) return;
-      pages.push({key:k, entry:entry, moments:moments});
+      dayJobs.push({key:k, entry:entry, moments:moments});
     });
-    if(pages.length === 0){
+    if(dayJobs.length === 0){
       statusEl.textContent = "沒有符合條件的日記可以匯出";
       return;
     }
@@ -1782,7 +1824,7 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     btn.disabled = true;
     statusEl.textContent = "準備圖示中⋯⋯";
     var usedMoodKeys = {};
-    pages.forEach(function(p){ p.moments.forEach(function(m){ usedMoodKeys[m.moodKey] = true; }); });
+    dayJobs.forEach(function(p){ p.moments.forEach(function(m){ usedMoodKeys[m.moodKey] = true; }); });
     var iconPromises = Object.keys(usedMoodKeys).map(function(k){ return resolveMoodIconForExport(getMood(k)); });
 
     Promise.all(iconPromises).then(function(){
@@ -1798,6 +1840,12 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     stage.style.top = "0";
     document.body.appendChild(stage);
 
+    // Paginate every day up front (this only measures against the offscreen stage, no capturing yet).
+    var pages = [];
+    dayJobs.forEach(function(job){
+      computeDayPages(stage, job.key, job.entry, job.moments).forEach(function(d){ pages.push(d); });
+    });
+
     var idx = 0;
     function nextPage(){
       if(idx >= pages.length){
@@ -1808,8 +1856,7 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
         return;
       }
       statusEl.textContent = "匯出中⋯⋯("+(idx+1)+"/"+pages.length+")";
-      var page = pages[idx];
-      var node = buildExportPageEl(stage, page.key, page.entry, page.moments);
+      var node = buildExportPageEl(stage, pages[idx]);
       html2canvas(node, {scale:2, useCORS:true, backgroundColor:"#FBF9F4"}).then(function(canvas){
         if(idx > 0) doc.addPage("a5", "portrait");
         var imgData = canvas.toDataURL("image/jpeg", 0.85);
@@ -1817,7 +1864,7 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
         idx++;
         nextPage();
       }).catch(function(e){
-        console.warn("export page failed", page.key, e);
+        console.warn("export page failed", e);
         idx++;
         nextPage();
       });
