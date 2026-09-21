@@ -48,7 +48,11 @@
 body{margin:0;background:var(--bg);color:var(--text);font-family:"Work Sans",-apple-system,BlinkMacSystemFont,sans-serif;padding:32px 16px 56px;display:flex;justify-content:center;}
 .page{width:100%;max-width:460px;display:flex;flex-direction:column;align-items:center;gap:14px;}
 .page-label{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-dim);}
-.phone{width:100%;max-width:400px;height:max(480px, min(760px, 82vh));background:var(--phone-bg);border:1px solid var(--border);border-radius:34px;box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;}
+.phone{position:relative;width:100%;max-width:400px;height:max(480px, min(760px, 82vh));background:var(--phone-bg);border:1px solid var(--border);border-radius:34px;box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;}
+.toast{position:absolute;left:50%;top:16px;transform:translate(-50%,-12px);z-index:30;background:var(--gold);color:#fff;font-size:13px;font-weight:600;padding:10px 18px;border-radius:100px;box-shadow:0 10px 24px -8px rgba(0,0,0,0.35);opacity:0;pointer-events:none;transition:opacity .25s ease, transform .25s ease;white-space:nowrap;max-width:calc(100% - 32px);overflow:hidden;text-overflow:ellipsis;}
+.toast.show{opacity:1;transform:translate(-50%,0);}
+.toast.error{background:#B5533C;}
+@media (prefers-reduced-motion: reduce){ .toast{transition:none;} }
 .statusbar{display:flex;justify-content:space-between;align-items:center;padding:14px 22px 4px;font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--text-dim);flex:none;}
 .app-header{padding:14px 22px 16px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid var(--border);flex:none;}
 .app-title-row{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap;}
@@ -270,6 +274,7 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
 <div class="page">
   <span class="page-label">App Demo · 手機日記原型</span>
   <div class="phone">
+    <div class="toast" id="toastEl"></div>
     <div class="statusbar">
       <span id="clockTime">9:41</span>
       <span>●●● 🔋100%</span>
@@ -316,7 +321,7 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
 
           <p class="picker-label">照片(最多三張)</p>
           <div class="photo-slots" id="photoSlots"></div>
-          <input type="file" id="photoInput" accept="image/*" hidden>
+          <input type="file" id="photoInput" accept="image/*" multiple hidden>
 
           <div class="save-row">
             <button id="saveBtn" type="button">儲存這天</button>
@@ -783,7 +788,6 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
   /* ---------- state ---------- */
   var activeDate = new Date(TODAY);
   var draft = null;
-  var pendingSlot = null;
   var picker = {mood:null, text:"", people:[]};
   var editingMomentIndex = null;
   var calendarViewDate = new Date(TODAY.getFullYear(), TODAY.getMonth(), 1);
@@ -820,6 +824,14 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
   var calNextBtnEl = document.getElementById("calNextBtn");
   var modalOverlayEl = document.getElementById("modalOverlay");
   var modalSheetEl = document.getElementById("modalSheet");
+  var toastEl = document.getElementById("toastEl");
+  var toastTimer = null;
+  function showToast(msg, isError){
+    toastEl.textContent = msg;
+    toastEl.className = "toast show" + (isError ? " error" : "");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ toastEl.className = "toast"; }, 2200);
+  }
 
   function activeKey(){ return fmtKey(activeDate); }
 
@@ -845,6 +857,7 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
         var idx = picker.people.indexOf(name);
         if(idx===-1) picker.people.push(name); else picker.people.splice(idx,1);
         renderPeopleField();
+        saveDraftCache();
       });
       wrap.appendChild(btn);
     });
@@ -857,6 +870,7 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
       if(v && picker.people.indexOf(v) === -1){ picker.people.push(v); }
       input.value = "";
       renderPeopleField();
+      saveDraftCache();
     }
   });
 
@@ -867,6 +881,14 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     renderPeopleField();
   }
 
+  var DRAFT_CACHE_KEY = "moodDiary.draftCache.v1";
+  function saveDraftCache(){
+    try{ localStorage.setItem(DRAFT_CACHE_KEY, JSON.stringify({key:activeKey(), draft:draft, picker:picker, editingMomentIndex:editingMomentIndex})); }
+    catch(e){}
+  }
+  function clearDraftCache(){ try{ localStorage.removeItem(DRAFT_CACHE_KEY); }catch(e){} }
+  function loadDraftCache(){ try{ var raw = localStorage.getItem(DRAFT_CACHE_KEY); return raw ? JSON.parse(raw) : null; }catch(e){ return null; } }
+
   function loadDraftForActiveDate(){
     var entry = entries[activeKey()];
     var photos = entry ? entry.photos.slice(0,3) : [];
@@ -875,8 +897,19 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
       moments: entry ? entry.moments.map(function(m){ return {moodKey:m.moodKey, text:m.text, people:(m.people||[]).slice()}; }) : [],
       photos: photos
     };
-    pendingSlot = null;
     resetPicker();
+
+    var cached = loadDraftCache();
+    if(cached && cached.key === activeKey()){
+      var freshSnapshot = JSON.stringify(draft);
+      var hadUnsavedChanges = JSON.stringify(cached.draft) !== freshSnapshot ||
+        cached.picker.mood || (cached.picker.text||"").trim() || (cached.picker.people||[]).length;
+      draft = cached.draft;
+      picker = cached.picker;
+      editingMomentIndex = (typeof cached.editingMomentIndex === "number") ? cached.editingMomentIndex : null;
+      momentTextEl.value = picker.text || "";
+      if(hadUnsavedChanges) showToast("已幫你補回上次沒存的內容");
+    }
   }
 
   function renderComposerHeader(){
@@ -904,6 +937,7 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
         picker.mood = (picker.mood === key) ? null : key;
         renderMoodPicker();
         renderAddMomentButton();
+        saveDraftCache();
       }, "mood-chip");
     });
   }
@@ -914,7 +948,13 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     cancelEditMomentBtnEl.hidden = editingMomentIndex === null;
   }
 
-  momentTextEl.addEventListener("input", function(){ picker.text = momentTextEl.value; renderAddMomentButton(); });
+  var draftTextSaveTimer = null;
+  momentTextEl.addEventListener("input", function(){
+    picker.text = momentTextEl.value;
+    renderAddMomentButton();
+    clearTimeout(draftTextSaveTimer);
+    draftTextSaveTimer = setTimeout(saveDraftCache, 400);
+  });
 
   addMomentBtnEl.addEventListener("click", function(){
     if(!picker.mood || !picker.text.trim()) return;
@@ -924,9 +964,11 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     renderMoodPicker();
     renderAddMomentButton();
     renderMomentsList();
+    saveDraftCache();
   });
   cancelEditMomentBtnEl.addEventListener("click", function(){
     resetPicker(); renderMoodPicker(); renderAddMomentButton(); renderMomentsList();
+    saveDraftCache();
   });
 
   function tagChipsHtml(moment){
@@ -963,15 +1005,26 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
         renderAddMomentButton();
         renderMomentsList();
         momentTextEl.focus();
+        saveDraftCache();
       });
       card.querySelector(".moment-delete").addEventListener("click", function(ev){
         ev.stopPropagation();
+        if(!confirm("要刪除這一段心情記事嗎?")) return;
         draft.moments.splice(idx,1);
         if(editingMomentIndex === idx) resetPicker();
         renderMoodPicker(); renderAddMomentButton(); renderMomentsList();
+        saveDraftCache();
       });
       momentsListEl.appendChild(card);
     });
+  }
+
+  function openPhotoPreview(src){
+    modalSheetEl.innerHTML =
+      '<div class="modal-top"><div></div><button type="button" class="modal-close" id="modalCloseBtn" aria-label="關閉">×</button></div>' +
+      '<img src="'+src+'" alt="日記照片" style="width:100%;border-radius:12px;display:block;">';
+    modalOverlayEl.hidden = false;
+    document.getElementById("modalCloseBtn").addEventListener("click", closeModal);
   }
 
   function renderPhotoSlots(){
@@ -983,31 +1036,52 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
         slot.className = "photo-slot" + (photo ? " filled" : "");
         if(photo){
           slot.innerHTML = '<img src="'+photo+'" alt="日記照片 '+(i+1)+'"><button type="button" class="photo-remove" aria-label="移除照片">×</button>';
-          slot.querySelector(".photo-remove").addEventListener("click", function(ev){ ev.stopPropagation(); draft.photos[i]=null; renderPhotoSlots(); });
+          slot.setAttribute("role","button"); slot.setAttribute("tabindex","0"); slot.setAttribute("aria-label","預覽照片 "+(i+1));
+          slot.addEventListener("click", function(){ openPhotoPreview(photo); });
+          slot.addEventListener("keydown", function(ev){ if(ev.key==="Enter"||ev.key===" "){ ev.preventDefault(); openPhotoPreview(photo); } });
+          slot.querySelector(".photo-remove").addEventListener("click", function(ev){
+            ev.stopPropagation();
+            if(!confirm("要刪除這張照片嗎?")) return;
+            draft.photos[i]=null;
+            renderPhotoSlots();
+            saveDraftCache();
+          });
         } else {
           slot.setAttribute("role","button"); slot.setAttribute("tabindex","0"); slot.setAttribute("aria-label","新增照片 "+(i+1));
           slot.innerHTML = '<span class="plus">＋</span><span>新增照片</span>';
-          slot.addEventListener("click", function(){ pendingSlot = i; photoInputEl.click(); });
-          slot.addEventListener("keydown", function(ev){ if(ev.key==="Enter"||ev.key===" "){ ev.preventDefault(); pendingSlot=i; photoInputEl.click(); } });
+          slot.addEventListener("click", function(){ photoInputEl.click(); });
+          slot.addEventListener("keydown", function(ev){ if(ev.key==="Enter"||ev.key===" "){ ev.preventDefault(); photoInputEl.click(); } });
         }
         photoSlotsEl.appendChild(slot);
       })(i);
     }
   }
   photoInputEl.addEventListener("change", function(){
-    var file = photoInputEl.files && photoInputEl.files[0];
-    if(!file || pendingSlot === null) return;
-    var slot = pendingSlot;
-    compressImage(file, 1280, 0.75).then(function(dataUrl){
-      draft.photos[slot] = dataUrl;
-      pendingSlot = null;
-      renderPhotoSlots();
-    }).catch(function(){
-      // Don't silently fall back to the original (uncompressed, sometimes HEIC) file --
-      // that's the one thing actually big enough to blow past storage limits.
-      pendingSlot = null;
-      saveStatusEl.textContent = "這張照片沒辦法處理,換一張試試(有些 iPhone 相簿裡的格式不支援)";
-      saveStatusEl.className = "";
+    var files = photoInputEl.files ? Array.prototype.slice.call(photoInputEl.files) : [];
+    if(!files.length){ photoInputEl.value = ""; return; }
+    var emptyIndices = [];
+    for(var i=0;i<3;i++){ if(!draft.photos[i]) emptyIndices.push(i); }
+    var toProcess = files.slice(0, emptyIndices.length);
+    var failed = 0;
+    var remaining = toProcess.length;
+    if(remaining === 0){ photoInputEl.value = ""; return; }
+    toProcess.forEach(function(file, idx){
+      var slotIdx = emptyIndices[idx];
+      compressImage(file, 1280, 0.75).then(function(dataUrl){
+        draft.photos[slotIdx] = dataUrl;
+      }).catch(function(){
+        failed++;
+      }).then(function(){
+        remaining--;
+        if(remaining === 0){
+          renderPhotoSlots();
+          saveDraftCache();
+          if(failed > 0){
+            saveStatusEl.textContent = failed===1 ? "有一張照片沒辦法處理,換一張試試" : "有幾張照片沒辦法處理,換一張試試";
+            saveStatusEl.className = "";
+          }
+        }
+      });
     });
     photoInputEl.value = "";
   });
@@ -1187,10 +1261,13 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
       if(entries[key]){
         delete entries[key]; saveEntries();
         cloudSyncEntry(key, null);
+        clearDraftCache();
         saveStatusEl.textContent = "已清空這天 ✓"; saveStatusEl.className = "ok";
+        showToast("已清空這天 ✓");
         updateStats(); renderRecallGrid(); renderCalendar();
       } else {
         saveStatusEl.textContent = "先新增一段心情記事,或加張照片吧"; saveStatusEl.className = "";
+        showToast("先新增一段心情記事,或加張照片吧", true);
       }
       return;
     }
@@ -1201,9 +1278,12 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     if(ok || usingCloud){
       saveStatusEl.textContent = "已儲存 ✓";
       saveStatusEl.className = "ok";
+      showToast("已儲存這天的日記 ✓");
+      clearDraftCache();
     } else {
       saveStatusEl.textContent = "本機空間已滿,請到設定開啟雲端同步";
       saveStatusEl.className = "";
+      showToast("本機空間已滿,請到設定開啟雲端同步", true);
     }
     updateStats(); renderRecallGrid(); renderCalendar();
   });
@@ -1346,8 +1426,10 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
         '<span class="expense-amount">'+fmtMoney(e.amount)+'</span>' +
         '<button type="button" class="expense-delete" aria-label="刪除">×</button>';
       row.querySelector(".expense-delete").addEventListener("click", function(){
+        if(!confirm("要刪除這筆支出嗎?")) return;
         budget.expenses = budget.expenses.filter(function(x){ return x.id !== e.id; });
         saveBudget(); renderBudget();
+        showToast("已刪除這筆支出 ✓");
       });
       listEl.appendChild(row);
     });
