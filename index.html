@@ -1589,8 +1589,16 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
 
     var photosHtml = "";
     if(entry.photos && entry.photos.length){
-      photosHtml = '<div style="display:flex;gap:6pt;margin-top:auto;padding-top:12pt;">' +
-        entry.photos.map(function(p){ return '<div style="flex:1;height:42mm;overflow:hidden;border-radius:4pt;"><img src="'+p+'" style="width:100%;height:100%;object-fit:cover;display:block;"></div>'; }).join("") +
+      // Boxes are portrait (taller than wide) since most photos people take on a phone are vertical;
+      // sizing depends on the count so a lone photo isn't stretched into a short wide strip.
+      var photoBox = function(w, h){ return function(p){
+        return '<div style="width:'+w+'mm;height:'+h+'mm;overflow:hidden;border-radius:4pt;flex:none;">' +
+          '<img src="'+p+'" style="width:100%;height:100%;object-fit:cover;display:block;">' +
+        '</div>';
+      }; };
+      var dims = entry.photos.length === 1 ? [66,88] : entry.photos.length === 2 ? [52,69] : [36,48];
+      photosHtml = '<div style="display:flex;justify-content:center;gap:6mm;margin-top:auto;padding-top:12pt;">' +
+        entry.photos.map(photoBox(dims[0], dims[1])).join("") +
       '</div>';
     }
 
