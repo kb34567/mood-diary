@@ -1171,8 +1171,9 @@ input#moodLabelInput{border:1px solid var(--border);border-radius:10px;backgroun
     entries[key] = {date:key, moments:momentsToSave, photos:photos};
     var ok = saveEntries();
     cloudSyncEntry(key, entries[key]);
-    saveStatusEl.textContent = ok ? "已儲存 ✓" : "儲存失敗,照片可能太大了";
-    saveStatusEl.className = ok ? "ok" : "";
+    var usingCloud = cloudReady && !!syncCode;
+    saveStatusEl.textContent = (ok || usingCloud) ? "已儲存 ✓" : "儲存失敗,照片可能太大了";
+    saveStatusEl.className = (ok || usingCloud) ? "ok" : "";
     updateStats(); renderRecallGrid(); renderCalendar();
   });
 
